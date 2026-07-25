@@ -1,0 +1,74 @@
+from functools import lru_cache
+from pathlib import Path
+
+import gspread
+from google.oauth2.service_account import Credentials
+
+from app.core.config import get_settings
+
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive.readonly",
+]
+
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _resolve_credentials_path() -> Path:
+    settings = get_settings()
+    path = Path(settings.GOOGLE_CREDENTIALS_PATH)
+    return path if path.is_absolute() else BACKEND_ROOT / path
+
+
+@lru_cache
+def get_client() -> gspread.Client:
+    """Authenticated gspread client, built once and reused across requests.
+
+    Supports two credential sources (checked in order):
+    1. ``GOOGLE_CREDENTIALS_JSON_BASE64`` — base64-encoded service-account JSON,
+       ideal for serverless deployments (Vercel, etc.) where a file path is unavailable.
+    2. ``GOOGLE_CREDENTIALS_PATH`` — local file path (default: ``credentials/service-account.json``).
+    """
+    import base64
+    import json
+
+    settings = get_settings()
+
+    if settings.GOOGLE_CREDENTIALS_JSON_BASE64.strip():
+        json_bytes = base64.b64decode(settings.GOOGLE_CREDENTIALS_JSON_BASE64.strip())
+        info = json.loads(json_bytes)
+        credentials = Credentials.from_service_account_info(info, scopes=SCOPES)
+    else:
+        credentials = Credentials.from_service_account_file(
+            str(_resolve_credentials_path()), scopes=SCOPES
+        )
+
+    return gspread.authorize(credentials)
+
+
+def open_sheet(sheet_id: str) -> gspread.Spreadsheet:
+    return get_client().open_by_key(sheet_id)
+
+
+def get_worksheet(sheet_id: str, worksheet_name: str) -> gspread.Worksheet:
+    return open_sheet(sheet_id).worksheet(worksheet_name)
+
+
+def list_worksheet_titles(sheet_id: str) -> list[str]:
+    return [worksheet.title for worksheet in open_sheet(sheet_id).worksheets()]
+
+
+def read_all_records(sheet_id: str, worksheet_name: str) -> list[dict]:
+    """Read a worksheet as a list of dicts, keyed by its header row."""
+    return get_worksheet(sheet_id, worksheet_name).get_all_records()
+
+
+def append_records(sheet_id: str, worksheet_name: str, records: list[dict]) -> None:
+    """Append rows to a worksheet, ordering values to match its existing header row."""
+    if not records:
+        return
+
+    worksheet = get_worksheet(sheet_id, worksheet_name)
+    header = worksheet.row_values(1)
+    rows = [[str(record.get(column, "")) for column in header] for record in records]
+    worksheet.append_rows(rows, value_input_option="USER_ENTERED")

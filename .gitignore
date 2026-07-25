@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+
+# Virtual Environment
+.venv/
+venv/
+
+# Environment
+backend/.env
+
+# Google Credentials
+backend/credentials/
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# Node
+frontend/node_modules/
+frontend/.next/
+
+# Python cache
+.pytest_cache/
+
+# Data output
+data/temp/*
+data/output/*

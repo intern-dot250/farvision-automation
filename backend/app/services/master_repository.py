@@ -1,0 +1,49 @@
+from functools import lru_cache
+
+import pandas as pd
+
+from app.core.config import get_settings
+from app.services import sheets_client
+
+MASTER_WORKSHEET = "Master"
+_LOOKUP_COLUMNS = ("Payee Name", "Account Head")
+
+
+def _normalize(name: str) -> str:
+    return " ".join(name.strip().upper().split())
+
+
+@lru_cache
+def _load_master_df() -> pd.DataFrame:
+    settings = get_settings()
+    records = sheets_client.read_all_records(settings.STATEMENT_MASTER_SHEET_ID, MASTER_WORKSHEET)
+    return pd.DataFrame.from_records(records)
+
+
+def find_party(payee_name: str | None) -> dict | None:
+    """Look up a party in Master by Payee Name or Account Head, case/whitespace-insensitive.
+
+    Returns the first matching row as a dict, or None if no party in Master
+    matches — which is how "Internal" transactions with no IFSC still get a
+    definitive non-match check against known parties.
+    """
+    if not payee_name:
+        return None
+
+    df = _load_master_df()
+    key = _normalize(payee_name)
+
+    for column in _LOOKUP_COLUMNS:
+        if column not in df.columns:
+            continue
+        normalized = df[column].astype(str).apply(_normalize)
+        match = df[normalized == key]
+        if not match.empty:
+            return match.iloc[0].to_dict()
+
+    return None
+
+
+def clear_cache() -> None:
+    """Force the next lookup to re-fetch Master from Sheets (e.g. after edits)."""
+    _load_master_df.cache_clear()

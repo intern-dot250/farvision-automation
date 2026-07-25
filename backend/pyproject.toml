@@ -1,0 +1,8 @@
+[project]
+name = "farvision-automation-backend"
+version = "0.1.0"
+description = "Backend API for Farvision ERP import sheet automation"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
