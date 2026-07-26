@@ -41,3 +41,5 @@ frontend/.next/
 # Data output
 data/temp/*
 data/output/*
+.vercel
+.env*

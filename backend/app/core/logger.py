@@ -10,9 +10,6 @@ def configure_logging() -> None:
     """Configure loguru sinks based on environment. Idempotent."""
     settings = get_settings()
 
-    log_dir = Path(settings.LOG_DIR)
-    log_dir.mkdir(parents=True, exist_ok=True)
-
     logger.remove()
 
     is_production = settings.APP_ENV == "production"
@@ -26,14 +23,21 @@ def configure_logging() -> None:
         diagnose=settings.DEBUG,
     )
 
-    logger.add(
-        log_dir / "app.log",
-        level=settings.LOG_LEVEL,
-        rotation="10 MB",
-        retention="14 days",
-        compression="zip",
-        enqueue=True,
-    )
+    # Skip file logging in serverless environments (Vercel has a read-only
+    # filesystem). Only write to disk when LOG_DIR is writable.
+    log_dir = Path(settings.LOG_DIR)
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        logger.add(
+            log_dir / "app.log",
+            level=settings.LOG_LEVEL,
+            rotation="10 MB",
+            retention="14 days",
+            compression="zip",
+            enqueue=True,
+        )
+    except OSError:
+        pass  # Read-only filesystem (e.g. Vercel serverless) — stdout only
 
 
 __all__ = ["logger", "configure_logging"]

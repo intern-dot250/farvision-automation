@@ -3,6 +3,20 @@ name = "farvision-automation-backend"
 version = "0.1.0"
 description = "Backend API for Farvision ERP import sheet automation"
 requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.23.0",
+    "python-multipart>=0.0.6",
+    "supabase>=2.0.0",
+    "google-api-python-client>=2.100.0",
+    "google-auth-httplib2>=0.2.0",
+    "google-auth-oauthlib>=1.2.0",
+    "pyjwt>=2.8.0",
+    "python-dotenv>=1.0.0",
+    "aiofiles>=23.0.0",
+    "pydantic-settings>=2.0.0",
+    "httpx>=0.24.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
