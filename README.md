@@ -42,7 +42,7 @@ npm run dev
 
 ## Deployment Notes
 
-- Both the frontend and backend are deployed as separate Vercel projects (`frontend`, `farvision-backend`), rooted at their respective subdirectories.
+- Both the frontend and backend are deployed as separate Vercel projects (`frontend`, `farvision-backend`), each connected to this repo with Root Directory set to `frontend`/`backend` respectively — pushes to `master` auto-deploy both.
 - The backend runs on Vercel's Python serverless runtime (`backend/api/index.py` + `backend/vercel.json`). **Important:** Vercel's Python builder reads dependencies exclusively from `backend/pyproject.toml`, not `requirements.txt` — keep both in sync when adding a new import.
 - Google service account credentials are provided via the `GOOGLE_CREDENTIALS_JSON_BASE64` env var (base64-encoded service account JSON) rather than a file, since Vercel's filesystem doesn't have the git-ignored `credentials/service-account.json` available at runtime.
 
