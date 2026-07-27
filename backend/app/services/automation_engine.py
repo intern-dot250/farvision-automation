@@ -152,10 +152,15 @@ def _build_deposit_withdrawal_rows(txn: TransactionRowSet, link_ref_code: int) -
     }
 
 
-def _load_transactions(run_id: str) -> list[TransactionRowSet]:
+def _read_bank_rows_from_sheet() -> list[dict]:
     settings = get_settings()
-    bank_rows = sheets_client.read_all_records(settings.STATEMENT_MASTER_SHEET_ID, BANK_STATEMENT_WORKSHEET)
+    return sheets_client.read_all_records(settings.STATEMENT_MASTER_SHEET_ID, BANK_STATEMENT_WORKSHEET)
 
+
+def _process_rows(bank_rows: list[dict], run_id: str) -> list[TransactionRowSet]:
+    """Classify/route raw transaction rows, regardless of source (Google
+    Sheet tab or an uploaded file) — same row shape, same pipeline.
+    """
     # Batch duplicate check: single Supabase query instead of N per-row calls.
     raw_references = [str(row.get("REFERENCE", "")).strip() for row in bank_rows]
     existing_refs = ledger_repository.is_already_processed_batch(raw_references)
@@ -179,7 +184,7 @@ def _load_transactions(run_id: str) -> list[TransactionRowSet]:
                         debit=0,
                         credit=0,
                         business_unit=row.get("BUSINESS UNIT", ""),
-                        txn_date=datetime.strptime(row["TXN DATE"], "%d-%b-%Y"),
+                        txn_date=datetime.strptime(str(row["TXN DATE"]), "%d-%b-%Y"),
                         classification=classifier.ClassificationResult(
                             is_internal=False, head="", payee_name=None, matched_master_row=None, needs_review=False
                         ),
@@ -191,9 +196,10 @@ def _load_transactions(run_id: str) -> list[TransactionRowSet]:
             description = row.get("DESCRIPTION", "")
             debit = _parse_amount(str(row.get("DEBITS", "")))
             credit = _parse_amount(str(row.get("CREDITS", "")))
-            txn_date = datetime.strptime(row["TXN DATE"], "%d-%b-%Y")
+            txn_date = datetime.strptime(str(row["TXN DATE"]), "%d-%b-%Y")
+            existing_head = str(row.get("HEAD", "")).strip()
 
-            classification = classifier.classify_transaction(description)
+            classification = classifier.classify_transaction(description, existing_head=existing_head)
 
             destination = (
                 "review"
@@ -321,14 +327,22 @@ def _write_transactions(transactions: list[TransactionRowSet], settings, run_id:
             )
 
 
-def run_automation(dry_run: bool = True) -> RunResult:
+def run_automation(dry_run: bool = True, rows: list[dict] | None = None) -> RunResult:
+    """Run the pipeline. If ``rows`` is given (e.g. parsed from an uploaded
+    file), those are used directly; otherwise falls back to reading the
+    configured Google Sheet bank statement tab.
+    """
     run_id = str(uuid.uuid4())
     settings = get_settings()
 
-    logger.info(f"[{run_id}] Automation run started (dry_run={dry_run})")
-    ledger_repository.log_audit(run_id, "info", "Automation run started", {"dry_run": dry_run})
+    logger.info(f"[{run_id}] Automation run started (dry_run={dry_run}, source={'upload' if rows is not None else 'sheet'})")
+    ledger_repository.log_audit(
+        run_id, "info", "Automation run started",
+        {"dry_run": dry_run, "source": "upload" if rows is not None else "sheet"},
+    )
 
-    transactions = _load_transactions(run_id)
+    bank_rows = rows if rows is not None else _read_bank_rows_from_sheet()
+    transactions = _process_rows(bank_rows, run_id)
     _assign_rows(transactions, settings, run_id)
 
     if not dry_run:

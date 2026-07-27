@@ -1,0 +1,61 @@
+import io
+
+import pandas as pd
+import pytest
+
+from app.services.statement_parser import parse_statement_file
+
+
+def test_parses_csv_with_required_columns():
+    csv_content = (
+        "SL#,TXN DATE,DESCRIPTION,REFERENCE,DEBITS,CREDITS\n"
+        "1,22-Jul-2026,YIB-NEFT-REF1-Some Payee-SBIN0007204-Contractor-STATE BANK OF INDIA,REF1,1000,\n"
+    ).encode()
+
+    rows = parse_statement_file("statement.csv", csv_content)
+
+    assert len(rows) == 1
+    assert rows[0]["REFERENCE"] == "REF1"
+    assert rows[0]["DEBITS"] == "1000"
+
+
+def test_parses_xlsx_with_required_columns():
+    df = pd.DataFrame(
+        [
+            {
+                "SL#": "1",
+                "TXN DATE": "22-Jul-2026",
+                "DESCRIPTION": "YIB-NEFT-REF1-Some Payee-SBIN0007204-Contractor-STATE BANK OF INDIA",
+                "REFERENCE": "REF1",
+                "DEBITS": "1000",
+                "CREDITS": "",
+            }
+        ]
+    )
+    buffer = io.BytesIO()
+    df.to_excel(buffer, index=False)
+    content = buffer.getvalue()
+
+    rows = parse_statement_file("statement.xlsx", content)
+
+    assert len(rows) == 1
+    assert rows[0]["REFERENCE"] == "REF1"
+
+
+def test_missing_required_column_raises_value_error():
+    csv_content = "SL#,DESCRIPTION\n1,test\n".encode()
+
+    with pytest.raises(ValueError, match="missing required columns"):
+        parse_statement_file("statement.csv", csv_content)
+
+
+def test_blank_cells_become_empty_strings():
+    csv_content = (
+        "TXN DATE,DESCRIPTION,REFERENCE,DEBITS,CREDITS,HEAD\n"
+        "22-Jul-2026,desc,REF1,1000,,\n"
+    ).encode()
+
+    rows = parse_statement_file("statement.csv", csv_content)
+
+    assert rows[0]["CREDITS"] == ""
+    assert rows[0]["HEAD"] == ""

@@ -30,8 +30,38 @@ def _derive_head(master_row: dict) -> str:
     return str(master_row.get("Account Head") or "Unclassified")
 
 
-def classify_transaction(description: str) -> ClassificationResult:
+def classify_transaction(description: str, existing_head: str | None = None) -> ClassificationResult:
+    """Classify a transaction. If ``existing_head`` is provided (non-empty —
+    e.g. already filled in on an uploaded statement), it's trusted for the
+    Internal/Non-Internal decision and displayed head label instead of being
+    re-derived, but a Master lookup still runs to populate Account
+    Head/Parent Account Head/Payment Mode needed for the output rows.
+    """
     parsed = parse_description(description)
+    trusted_head = existing_head.strip() if existing_head else ""
+
+    if trusted_head:
+        if trusted_head.upper() == "INTERNAL" or parsed.is_internal_format:
+            return ClassificationResult(
+                is_internal=True,
+                head="Internal",
+                payee_name=None,
+                matched_master_row=None,
+                needs_review=False,
+            )
+
+        matched = master_repository.find_party(parsed.payee_name)
+
+        return ClassificationResult(
+            is_internal=False,
+            head=trusted_head,
+            payee_name=parsed.payee_name,
+            matched_master_row=matched,
+            needs_review=matched is None,
+            review_reason=(
+                None if matched else f"No Master match for payee '{parsed.payee_name}' (given head: {trusted_head})"
+            ),
+        )
 
     if parsed.is_internal_format:
         return ClassificationResult(

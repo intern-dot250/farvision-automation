@@ -1,4 +1,4 @@
-import { apiFetch } from "@/lib/api-client";
+import { API_BASE_URL, apiFetch, ApiError } from "@/lib/api-client";
 
 export type TransactionSummary = {
   sl_no: string;
@@ -26,4 +26,30 @@ export function runAutomation(dryRun: boolean): Promise<RunResponse> {
   return apiFetch<RunResponse>(`/automation/run?dry_run=${dryRun}`, {
     method: "POST",
   });
+}
+
+export async function runAutomationUpload(
+  file: File,
+  dryRun: boolean,
+): Promise<RunResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetch(
+    `${API_BASE_URL}/automation/run-upload?dry_run=${dryRun}`,
+    {
+      method: "POST",
+      body: formData,
+    },
+  );
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new ApiError(
+      response.status,
+      body?.detail ?? `Upload failed with status ${response.status}`,
+    );
+  }
+
+  return response.json() as Promise<RunResponse>;
 }

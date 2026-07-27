@@ -1,16 +1,13 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from app.core.constants import Tags
 from app.schemas.automation import RunResponse, TransactionSummary
-from app.services import automation_engine
+from app.services import automation_engine, statement_parser
 
 router = APIRouter(prefix="/automation", tags=[Tags.AUTOMATION])
 
 
-@router.post("/run", response_model=RunResponse, summary="Run the bank statement automation engine")
-def run_automation(dry_run: bool = True) -> RunResponse:
-    result = automation_engine.run_automation(dry_run=dry_run)
-
+def _build_run_response(result: automation_engine.RunResult) -> RunResponse:
     return RunResponse(
         run_id=result.run_id,
         dry_run=result.dry_run,
@@ -33,3 +30,29 @@ def run_automation(dry_run: bool = True) -> RunResponse:
             for txn in result.transactions
         ],
     )
+
+
+@router.post("/run", response_model=RunResponse, summary="Run the automation engine against the configured Google Sheet")
+def run_automation(dry_run: bool = True) -> RunResponse:
+    result = automation_engine.run_automation(dry_run=dry_run)
+    return _build_run_response(result)
+
+
+@router.post(
+    "/run-upload",
+    response_model=RunResponse,
+    summary="Run the automation engine against an uploaded bank statement file",
+)
+async def run_automation_upload(dry_run: bool = True, file: UploadFile = File(...)) -> RunResponse:
+    content = await file.read()
+
+    try:
+        rows = statement_parser.parse_statement_file(file.filename or "", content)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if not rows:
+        raise HTTPException(status_code=400, detail="Uploaded file has no transaction rows")
+
+    result = automation_engine.run_automation(dry_run=dry_run, rows=rows)
+    return _build_run_response(result)

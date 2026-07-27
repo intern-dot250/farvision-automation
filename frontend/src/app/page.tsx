@@ -4,11 +4,12 @@ import { useEffect, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { getStats, type StatsSummary } from "@/lib/api/history";
-import { runAutomation, type RunResponse } from "@/lib/api/automation";
+import { runAutomationUpload, type RunResponse } from "@/lib/api/automation";
 
 export default function DashboardPage() {
   const [stats, setStats] = useState<StatsSummary | null>(null);
   const [statsError, setStatsError] = useState(false);
+  const [file, setFile] = useState<File | null>(null);
   const [dryRun, setDryRun] = useState(true);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<RunResponse | null>(null);
@@ -28,10 +29,12 @@ export default function DashboardPage() {
   }, []);
 
   const handleRun = async () => {
+    if (!file) return;
+
     setRunning(true);
     setRunError(null);
     try {
-      const response = await runAutomation(dryRun);
+      const response = await runAutomationUpload(file, dryRun);
       setResult(response);
       loadStats();
     } catch (err) {
@@ -48,7 +51,7 @@ export default function DashboardPage() {
           Dashboard
         </h1>
         <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-          Trigger a processing run and monitor its status.
+          Upload today&apos;s bank statement to classify and route transactions.
         </p>
       </div>
 
@@ -75,8 +78,21 @@ export default function DashboardPage() {
         </Card>
       </div>
 
-      <Card title="Run Processing">
+      <Card title="Upload Bank Statement">
         <div className="flex flex-col gap-4">
+          <label className="flex flex-col gap-2">
+            <span className="text-sm text-zinc-600 dark:text-zinc-400">
+              Statement file (.xlsx or .csv)
+            </span>
+            <input
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              disabled={running}
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              className="text-sm text-zinc-600 file:mr-3 file:rounded-md file:border-0 file:bg-zinc-900 file:px-3 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-zinc-700 dark:text-zinc-400 dark:file:bg-zinc-100 dark:file:text-zinc-900 dark:hover:file:bg-zinc-300"
+            />
+          </label>
+
           <label className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-400">
             <input
               type="checkbox"
@@ -89,14 +105,14 @@ export default function DashboardPage() {
 
           <button
             onClick={handleRun}
-            disabled={running}
+            disabled={running || !file}
             className="w-fit rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
           >
             {running
-              ? "Running..."
+              ? "Processing..."
               : dryRun
-                ? "Preview Run"
-                : "Run & Write to Sheets"}
+                ? "Preview Upload"
+                : "Upload & Write to Sheets"}
           </button>
 
           {runError && (
