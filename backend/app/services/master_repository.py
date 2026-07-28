@@ -17,9 +17,24 @@ _LOOKUP_COLUMNS = ("Payee Name", "Account Head")
 # (AR)", while "Ravi Vats" still matches "RAVI VATS(555)".
 _MASTER_SUFFIX_RE = re.compile(r"((\s*-\s*[A-Z0-9]{1,10})|(\s*\([A-Z0-9]{1,10}\)))+$")
 
+# Company-suffix naming conventions vary between the bank description and
+# Master ("Pvt Ltd" vs "Private Limited", "&" vs "and") for the exact same
+# company. These are deterministic, well-known abbreviation equivalences -
+# not fuzzy matching - so they can't make two genuinely different companies
+# compare equal.
+_LEGAL_SUFFIX_REPLACEMENTS = (
+    (re.compile(r"\bPRIVATE LIMITED\b"), "PVT LTD"),
+    (re.compile(r"\bPRIVATE\b"), "PVT"),
+    (re.compile(r"\bLIMITED\b"), "LTD"),
+)
+
 
 def _normalize(name: str) -> str:
-    return " ".join(name.strip().upper().split())
+    name = name.strip().upper().replace(".", "").replace(",", "")
+    name = name.replace("&", "AND")
+    for pattern, replacement in _LEGAL_SUFFIX_REPLACEMENTS:
+        name = pattern.sub(replacement, name)
+    return " ".join(name.split())
 
 
 def _strip_master_suffix(name: str) -> str:
