@@ -18,6 +18,22 @@ def _parse_amount(value: str) -> float:
     return float(value) if value else 0.0
 
 
+# "%d-%b-%Y" matches the Google Sheet / CSV text format ("22-Jul-2026").
+# "%Y-%m-%d %H:%M:%S" / "%Y-%m-%d" match native Excel date cells, which
+# pandas stringifies this way even when read with dtype=str.
+_TXN_DATE_FORMATS = ("%d-%b-%Y", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d")
+
+
+def _parse_txn_date(value: str) -> datetime:
+    value = value.strip()
+    for fmt in _TXN_DATE_FORMATS:
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    raise ValueError(f"time data {value!r} does not match any known TXN DATE format")
+
+
 def _format_amount(amount: float) -> str:
     return f"{amount:,.2f}" if amount else ""
 
@@ -184,7 +200,7 @@ def _process_rows(bank_rows: list[dict], run_id: str) -> list[TransactionRowSet]
                         debit=0,
                         credit=0,
                         business_unit=row.get("BUSINESS UNIT", ""),
-                        txn_date=datetime.strptime(str(row["TXN DATE"]), "%d-%b-%Y"),
+                        txn_date=_parse_txn_date(str(row["TXN DATE"])),
                         classification=classifier.ClassificationResult(
                             is_internal=False, head="", payee_name=None, matched_master_row=None, needs_review=False
                         ),
@@ -196,7 +212,7 @@ def _process_rows(bank_rows: list[dict], run_id: str) -> list[TransactionRowSet]
             description = row.get("DESCRIPTION", "")
             debit = _parse_amount(str(row.get("DEBITS", "")))
             credit = _parse_amount(str(row.get("CREDITS", "")))
-            txn_date = datetime.strptime(str(row["TXN DATE"]), "%d-%b-%Y")
+            txn_date = _parse_txn_date(str(row["TXN DATE"]))
             existing_head = str(row.get("HEAD", "")).strip()
 
             classification = classifier.classify_transaction(description, existing_head=existing_head)

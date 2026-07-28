@@ -14,6 +14,7 @@ export default function DashboardPage() {
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<RunResponse | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
+  const [sheetName, setSheetName] = useState("");
 
   const loadStats = () => {
     getStats()
@@ -34,7 +35,7 @@ export default function DashboardPage() {
     setRunning(true);
     setRunError(null);
     try {
-      const response = await runAutomationUpload(file, dryRun);
+      const response = await runAutomationUpload(file, dryRun, sheetName || undefined);
       setResult(response);
       loadStats();
     } catch (err) {
@@ -116,7 +117,23 @@ export default function DashboardPage() {
           </button>
 
           {runError && (
-            <p className="text-sm text-red-600 dark:text-red-400">{runError}</p>
+            <div className="flex flex-col gap-2">
+              <p className="text-sm text-red-600 dark:text-red-400">{runError}</p>
+              {runError.includes("multiple sheets") && (
+                <label className="flex flex-col gap-1">
+                  <span className="text-sm text-zinc-600 dark:text-zinc-400">
+                    Sheet/tab name to use
+                  </span>
+                  <input
+                    type="text"
+                    value={sheetName}
+                    onChange={(e) => setSheetName(e.target.value)}
+                    placeholder="e.g. YES IDW 0490"
+                    className="w-fit rounded-md border border-zinc-300 px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+                  />
+                </label>
+              )}
+            </div>
           )}
 
           {result && (

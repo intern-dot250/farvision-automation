@@ -31,9 +31,13 @@ export function runAutomation(dryRun: boolean): Promise<RunResponse> {
 export async function runAutomationUpload(
   file: File,
   dryRun: boolean,
+  sheetName?: string,
 ): Promise<RunResponse> {
   const formData = new FormData();
   formData.append("file", file);
+  if (sheetName) {
+    formData.append("sheet_name", sheetName);
+  }
 
   const response = await fetch(
     `${API_BASE_URL}/automation/run-upload?dry_run=${dryRun}`,

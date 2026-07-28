@@ -1,4 +1,4 @@
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from app.core.constants import Tags
 from app.schemas.automation import RunResponse, TransactionSummary
@@ -43,11 +43,15 @@ def run_automation(dry_run: bool = True) -> RunResponse:
     response_model=RunResponse,
     summary="Run the automation engine against an uploaded bank statement file",
 )
-async def run_automation_upload(dry_run: bool = True, file: UploadFile = File(...)) -> RunResponse:
+async def run_automation_upload(
+    dry_run: bool = True,
+    file: UploadFile = File(...),
+    sheet_name: str | None = Form(default=None),
+) -> RunResponse:
     content = await file.read()
 
     try:
-        rows = statement_parser.parse_statement_file(file.filename or "", content)
+        rows = statement_parser.parse_statement_file(file.filename or "", content, sheet_name=sheet_name or None)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
