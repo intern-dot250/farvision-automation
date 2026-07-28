@@ -6,8 +6,9 @@ import { Badge } from "@/components/ui/badge";
 import { getStats, type StatsSummary } from "@/lib/api/history";
 import {
   getSheetNames,
-  runAutomationUpload,
+  runAutomationUploadStream,
   type RunResponse,
+  type UploadProgress,
 } from "@/lib/api/automation";
 import { getSheetsStatus } from "@/lib/api/sheets";
 
@@ -23,6 +24,7 @@ export default function DashboardPage() {
   const [sheetName, setSheetName] = useState("");
   const [sheetOptions, setSheetOptions] = useState<string[]>([]);
   const [sheetOptionsLoading, setSheetOptionsLoading] = useState(false);
+  const [progress, setProgress] = useState<UploadProgress | null>(null);
 
   const loadStats = () => {
     getStats()
@@ -74,14 +76,21 @@ export default function DashboardPage() {
 
     setRunning(true);
     setRunError(null);
+    setProgress(null);
     try {
-      const response = await runAutomationUpload(file, dryRun, sheetName || undefined);
+      const response = await runAutomationUploadStream(
+        file,
+        dryRun,
+        sheetName || undefined,
+        setProgress,
+      );
       setResult(response);
       loadStats();
     } catch (err) {
       setRunError(err instanceof Error ? err.message : "Run failed");
     } finally {
       setRunning(false);
+      setProgress(null);
     }
   };
 
@@ -197,6 +206,26 @@ export default function DashboardPage() {
                 ? "Preview Upload"
                 : "Upload & Write to Sheets"}
           </button>
+
+          {running && (
+            <div className="flex flex-col gap-1">
+              <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
+                <div
+                  className="h-full rounded-full bg-zinc-900 transition-all duration-200 dark:bg-zinc-100"
+                  style={{
+                    width: progress && progress.total > 0
+                      ? `${Math.round((progress.processed / progress.total) * 100)}%`
+                      : "5%",
+                  }}
+                />
+              </div>
+              <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                {progress && progress.total > 0
+                  ? `${progress.stage === "writing" ? "Writing to sheets" : "Classifying"} — ${progress.processed}/${progress.total} (${Math.round((progress.processed / progress.total) * 100)}%)`
+                  : "Starting…"}
+              </span>
+            </div>
+          )}
 
           {runError && (
             <div className="flex flex-col gap-2">

@@ -82,3 +82,80 @@ export async function runAutomationUpload(
 
   return response.json() as Promise<RunResponse>;
 }
+
+export type UploadProgress = {
+  stage: "classifying" | "writing";
+  processed: number;
+  total: number;
+};
+
+export async function runAutomationUploadStream(
+  file: File,
+  dryRun: boolean,
+  sheetName: string | undefined,
+  onProgress: (progress: UploadProgress) => void,
+): Promise<RunResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+  if (sheetName) {
+    formData.append("sheet_name", sheetName);
+  }
+
+  const response = await fetch(
+    `${API_BASE_URL}/automation/run-upload-stream?dry_run=${dryRun}`,
+    {
+      method: "POST",
+      body: formData,
+    },
+  );
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new ApiError(
+      response.status,
+      body?.detail ?? `Upload failed with status ${response.status}`,
+    );
+  }
+
+  if (!response.body) {
+    // Fallback for environments where streaming isn't available - the
+    // whole response still arrives, just without incremental progress.
+    return response.json() as Promise<RunResponse>;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalResult: RunResponse | null = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const event = JSON.parse(line);
+      if (event.type === "progress") {
+        onProgress({ stage: event.stage, processed: event.processed, total: event.total });
+      } else if (event.type === "result") {
+        finalResult = event as RunResponse;
+      }
+    }
+  }
+
+  if (buffer.trim()) {
+    const event = JSON.parse(buffer);
+    if (event.type === "result") {
+      finalResult = event as RunResponse;
+    }
+  }
+
+  if (!finalResult) {
+    throw new ApiError(500, "Upload stream ended without a result");
+  }
+  return finalResult;
+}

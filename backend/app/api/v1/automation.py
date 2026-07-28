@@ -1,4 +1,7 @@
+import json
+
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 
 from app.core.constants import Tags
 from app.schemas.automation import RunResponse, SheetNamesResponse, TransactionSummary
@@ -75,3 +78,33 @@ async def run_automation_upload(
 
     result = automation_engine.run_automation(dry_run=dry_run, rows=rows)
     return _build_run_response(result)
+
+
+@router.post(
+    "/run-upload-stream",
+    summary="Same as /run-upload, but streams live progress as newline-delimited JSON instead of one final response",
+)
+async def run_automation_upload_stream(
+    dry_run: bool = True,
+    file: UploadFile = File(...),
+    sheet_name: str | None = Form(default=None),
+) -> StreamingResponse:
+    content = await file.read()
+
+    try:
+        rows = statement_parser.parse_statement_file(file.filename or "", content, sheet_name=sheet_name or None)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if not rows:
+        raise HTTPException(status_code=400, detail="Uploaded file has no transaction rows")
+
+    def event_stream():
+        for event in automation_engine.run_automation_stream(dry_run=dry_run, rows=rows):
+            if event["type"] == "result":
+                response = _build_run_response(event["result"])
+                yield json.dumps({"type": "result", **response.model_dump()}) + "\n"
+            else:
+                yield json.dumps(event) + "\n"
+
+    return StreamingResponse(event_stream(), media_type="application/x-ndjson")

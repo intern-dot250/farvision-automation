@@ -184,9 +184,13 @@ def _read_bank_rows_from_sheet() -> list[dict]:
     return sheets_client.read_all_records(settings.STATEMENT_MASTER_SHEET_ID, BANK_STATEMENT_WORKSHEET)
 
 
-def _process_rows(bank_rows: list[dict], run_id: str, settings) -> list[TransactionRowSet]:
+def _process_rows_stream(bank_rows: list[dict], run_id: str, settings):
     """Classify/route raw transaction rows, regardless of source (Google
     Sheet tab or an uploaded file) — same row shape, same pipeline.
+
+    Yields a {"processed", "total"} dict after each row so callers (e.g. a
+    streaming API response) can report live progress; returns the full
+    transactions list as the generator's return value.
     """
     # Duplicate check reads the Reference column directly from both real
     # Sheets - the Sheet is the single source of truth. A separate ledger
@@ -195,8 +199,9 @@ def _process_rows(bank_rows: list[dict], run_id: str, settings) -> list[Transact
     rp_refs = sheets_client.get_column_values(settings.RECEIPT_PAYMENT_SHEET_ID, "ReceiptPayment", "Reference")
     dw_refs = sheets_client.get_column_values(settings.DEPOSIT_WITHDRAWAL_SHEET_ID, "DepositWithdrawal", "Reference")
 
+    total = len(bank_rows)
     transactions = []
-    for row in bank_rows:
+    for index, row in enumerate(bank_rows):
         sl_no = str(row.get("SL#", ""))
         reference = str(row.get("REFERENCE", "")).strip()
 
@@ -229,36 +234,35 @@ def _process_rows(bank_rows: list[dict], run_id: str, settings) -> list[Transact
                         destination_sheet="receipt/payment" if original_dest == "receipt_payment" else "deposit/withdrawal",
                     )
                 )
-                continue
-
-            destination = (
-                "review"
-                if classification.needs_review
-                else "deposit_withdrawal"
-                if classification.is_internal
-                else "receipt_payment"
-            )
-
-            if classification.needs_review:
-                logger.warning(f"[{run_id}] SL#{sl_no} flagged for review: {classification.review_reason}")
-                ledger_repository.log_audit(
-                    run_id, "warning", f"SL#{sl_no} flagged for review",
-                    {"reference": reference, "reason": classification.review_reason},
+            else:
+                destination = (
+                    "review"
+                    if classification.needs_review
+                    else "deposit_withdrawal"
+                    if classification.is_internal
+                    else "receipt_payment"
                 )
 
-            transactions.append(
-                TransactionRowSet(
-                    sl_no=sl_no,
-                    reference=reference,
-                    description=description,
-                    debit=debit,
-                    credit=credit,
-                    business_unit=row.get("BUSINESS UNIT", ""),
-                    txn_date=txn_date,
-                    classification=classification,
-                    destination=destination,
+                if classification.needs_review:
+                    logger.warning(f"[{run_id}] SL#{sl_no} flagged for review: {classification.review_reason}")
+                    ledger_repository.log_audit(
+                        run_id, "warning", f"SL#{sl_no} flagged for review",
+                        {"reference": reference, "reason": classification.review_reason},
+                    )
+
+                transactions.append(
+                    TransactionRowSet(
+                        sl_no=sl_no,
+                        reference=reference,
+                        description=description,
+                        debit=debit,
+                        credit=credit,
+                        business_unit=row.get("BUSINESS UNIT", ""),
+                        txn_date=txn_date,
+                        classification=classification,
+                        destination=destination,
+                    )
                 )
-            )
         except Exception as exc:
             logger.error(f"[{run_id}] Failed to process SL#{sl_no}: {exc}")
             ledger_repository.log_audit(
@@ -282,7 +286,20 @@ def _process_rows(bank_rows: list[dict], run_id: str, settings) -> list[Transact
                 )
             )
 
+        yield {"processed": index + 1, "total": total}
+
     return transactions
+
+
+def _process_rows(bank_rows: list[dict], run_id: str, settings) -> list[TransactionRowSet]:
+    """Non-streaming wrapper around _process_rows_stream for callers that
+    don't need progress updates (e.g. the plain /run endpoint)."""
+    gen = _process_rows_stream(bank_rows, run_id, settings)
+    while True:
+        try:
+            next(gen)
+        except StopIteration as stop:
+            return stop.value
 
 
 def _assign_rows(transactions: list[TransactionRowSet], settings, run_id: str) -> None:
@@ -348,10 +365,15 @@ def _write_transactions(transactions: list[TransactionRowSet], settings, run_id:
     # no separate ledger to update here.
 
 
-def run_automation(dry_run: bool = True, rows: list[dict] | None = None) -> RunResult:
-    """Run the pipeline. If ``rows`` is given (e.g. parsed from an uploaded
-    file), those are used directly; otherwise falls back to reading the
-    configured Google Sheet bank statement tab.
+def run_automation_stream(dry_run: bool = True, rows: list[dict] | None = None):
+    """Same pipeline as run_automation(), but yields live progress events so
+    a caller (e.g. a streaming API response) can report real progress
+    instead of just waiting for one final response.
+
+    Yields dicts shaped either:
+      {"type": "progress", "stage": "classifying"|"writing", "processed": int, "total": int}
+      {"type": "result", "result": RunResult}
+    The "result" event is always the last one yielded.
     """
     run_id = str(uuid.uuid4())
     settings = get_settings()
@@ -363,10 +385,23 @@ def run_automation(dry_run: bool = True, rows: list[dict] | None = None) -> RunR
     )
 
     bank_rows = rows if rows is not None else _read_bank_rows_from_sheet()
-    transactions = _process_rows(bank_rows, run_id, settings)
+    total = len(bank_rows)
+    yield {"type": "progress", "stage": "classifying", "processed": 0, "total": total}
+
+    gen = _process_rows_stream(bank_rows, run_id, settings)
+    transactions: list[TransactionRowSet] = []
+    while True:
+        try:
+            progress = next(gen)
+            yield {"type": "progress", "stage": "classifying", **progress}
+        except StopIteration as stop:
+            transactions = stop.value
+            break
+
     _assign_rows(transactions, settings, run_id)
 
     if not dry_run:
+        yield {"type": "progress", "stage": "writing", "processed": total, "total": total}
         _write_transactions(transactions, settings, run_id)
 
     result = RunResult(
@@ -397,4 +432,16 @@ def run_automation(dry_run: bool = True, rows: list[dict] | None = None) -> RunR
         },
     )
 
-    return result
+    yield {"type": "result", "result": result}
+
+
+def run_automation(dry_run: bool = True, rows: list[dict] | None = None) -> RunResult:
+    """Run the pipeline and return only the final result - for callers that
+    don't need progress updates. If ``rows`` is given (e.g. parsed from an
+    uploaded file), those are used directly; otherwise falls back to reading
+    the configured Google Sheet bank statement tab.
+    """
+    for event in run_automation_stream(dry_run=dry_run, rows=rows):
+        if event["type"] == "result":
+            return event["result"]
+    raise RuntimeError("run_automation_stream ended without a result event")
