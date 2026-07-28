@@ -57,6 +57,7 @@ class TransactionRowSet:
     txn_date: datetime
     classification: ClassificationResult
     destination: str  # "deposit_withdrawal" | "receipt_payment" | "review" | "duplicate" | "error"
+    destination_sheet: str | None = None  # human-readable sheet name for duplicates
     review_reason: str | None = None
     rows: dict[str, list[dict]] = field(default_factory=dict)
 
@@ -194,6 +195,8 @@ def _process_rows(bank_rows: list[dict], run_id: str) -> list[TransactionRowSet]
                 ledger_repository.log_audit(
                     run_id, "info", f"Skipped duplicate SL#{sl_no}", {"reference": reference}
                 )
+                original = existing_refs[reference]
+                original_dest = original.get("destination", "")
                 transactions.append(
                     TransactionRowSet(
                         sl_no=sl_no,
@@ -204,9 +207,18 @@ def _process_rows(bank_rows: list[dict], run_id: str) -> list[TransactionRowSet]
                         business_unit=row.get("BUSINESS UNIT", ""),
                         txn_date=_parse_txn_date(str(row["TXN DATE"])),
                         classification=classifier.ClassificationResult(
-                            is_internal=False, head="", payee_name=None, matched_master_row=None, needs_review=False
+                            is_internal=False,
+                            head=original.get("head") or "",
+                            payee_name=original.get("payee_name"),
+                            matched_master_row=None,
+                            needs_review=False,
                         ),
                         destination="duplicate",
+                        destination_sheet="receipt/payment"
+                        if original_dest == "receipt_payment"
+                        else "deposit/withdrawal"
+                        if original_dest == "deposit_withdrawal"
+                        else None,
                     )
                 )
                 continue

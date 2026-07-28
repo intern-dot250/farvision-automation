@@ -4,8 +4,9 @@ from typing import Set
 from app.services import supabase_client
 
 
-def is_already_processed_batch(references: list[str]) -> Set[str]:
-    """Batch duplicate-detection: returns the subset of references already processed.
+def is_already_processed_batch(references: list[str]) -> dict[str, dict[str, str | None]]:
+    """Batch duplicate-detection: returns a mapping of already-processed
+    references to their stored metadata (head, payee_name, destination).
 
     Does a single Supabase query instead of N individual calls. Blank
     references are excluded - transactions without a bank reference number
@@ -14,16 +15,23 @@ def is_already_processed_batch(references: list[str]) -> Set[str]:
     """
     references = [r for r in references if r]
     if not references:
-        return set()
+        return {}
 
     response = (
         supabase_client.get_client()
         .table("processed_transactions")
-        .select("reference")
+        .select("reference, head, payee_name, destination")
         .in_("reference", references)
         .execute()
     )
-    return {row["reference"] for row in (response.data or [])}
+    return {
+        row["reference"]: {
+            "head": row.get("head"),
+            "payee_name": row.get("payee_name"),
+            "destination": row.get("destination"),
+        }
+        for row in (response.data or [])
+    }
 
 
 def mark_processed(

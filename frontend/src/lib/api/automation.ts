@@ -6,6 +6,7 @@ export type TransactionSummary = {
   description: string;
   head: string;
   destination: string;
+  destination_sheet: string | null;
   payee_name: string | null;
   needs_review: boolean;
   review_reason: string | null;

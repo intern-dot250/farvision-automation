@@ -189,6 +189,7 @@ export default function DashboardPage() {
                       <th className="px-3 py-2 font-medium">Payee</th>
                       <th className="px-3 py-2 font-medium">Head</th>
                       <th className="px-3 py-2 font-medium">Destination</th>
+                      <th className="px-3 py-2 font-medium">Sheet</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
@@ -210,6 +211,15 @@ export default function DashboardPage() {
                           >
                             {txn.destination}
                           </Badge>
+                        </td>
+                        <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">
+                          {txn.destination === "duplicate"
+                            ? (txn.destination_sheet ?? "—")
+                            : txn.destination === "receipt_payment"
+                              ? "Receipt / Payment"
+                              : txn.destination === "deposit_withdrawal"
+                                ? "Deposit / Withdrawal"
+                                : "—"}
                         </td>
                       </tr>
                     ))}
