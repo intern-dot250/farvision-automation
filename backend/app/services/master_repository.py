@@ -1,3 +1,4 @@
+import re
 from functools import lru_cache
 
 import pandas as pd
@@ -8,9 +9,21 @@ from app.services import sheets_client
 MASTER_WORKSHEET = "Master"
 _LOOKUP_COLUMNS = ("Payee Name", "Account Head")
 
+# Master's Payee Name often has a short employee/vendor code or tag appended
+# after the plain name used in bank descriptions - e.g. "Ravi Vats(555)",
+# "Ram Kishan (C)", "Rahul Kumar - CR0198 (AR)". Strip only that kind of
+# trailing code (parenthesized, or dash-prefixed, short alphanumeric) so
+# "Arvind" doesn't wrongly match an unrelated "ARVIND KUMAR GARG - CR0446
+# (AR)", while "Ravi Vats" still matches "RAVI VATS(555)".
+_MASTER_SUFFIX_RE = re.compile(r"((\s*-\s*[A-Z0-9]{1,10})|(\s*\([A-Z0-9]{1,10}\)))+$")
+
 
 def _normalize(name: str) -> str:
     return " ".join(name.strip().upper().split())
+
+
+def _strip_master_suffix(name: str) -> str:
+    return _MASTER_SUFFIX_RE.sub("", name).strip()
 
 
 @lru_cache
@@ -37,7 +50,8 @@ def find_party(payee_name: str | None) -> dict | None:
         if column not in df.columns:
             continue
         normalized = df[column].astype(str).apply(_normalize)
-        match = df[normalized == key]
+        stripped = normalized.apply(_strip_master_suffix)
+        match = df[(normalized == key) | (stripped == key)]
         if not match.empty:
             return match.iloc[0].to_dict()
 
