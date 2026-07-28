@@ -209,7 +209,7 @@ def _process_rows(bank_rows: list[dict], run_id: str) -> list[TransactionRowSet]
                         classification=classifier.ClassificationResult(
                             is_internal=False,
                             head=original.get("head") or "",
-                            payee_name=None,  # not stored in processed_transactions yet
+                            payee_name=original.get("head"),
                             matched_master_row=None,
                             needs_review=False,
                         ),
