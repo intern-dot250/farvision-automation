@@ -41,26 +41,16 @@ def test_list_runs_merges_started_and_completed_rows():
     assert run["needs_review"] == 1
 
 
-def test_get_stats_aggregates_counts():
-    mock_client = MagicMock()
+def test_get_stats_reads_directly_from_google_sheets():
+    def fake_count_data_rows(sheet_id, worksheet_name):
+        return {"ReceiptPayment": 11, "DepositWithdrawal": 3}[worksheet_name]
 
-    def make_count(value):
-        result = MagicMock()
-        result.count = value
-        query = MagicMock()
-        query.execute.return_value = result
-        query.eq.return_value = query
-        return query
-
-    mock_client.table.return_value.select.side_effect = [
-        make_count(15),
-        make_count(11),
-        make_count(3),
-    ]
-
-    with patch("app.services.history_repository.supabase_client.get_client", return_value=mock_client):
+    with patch(
+        "app.services.history_repository.sheets_client.count_data_rows",
+        side_effect=fake_count_data_rows,
+    ):
         stats = history_repository.get_stats()
 
-    assert stats["total_processed"] == 15
     assert stats["total_receipt_payment"] == 11
     assert stats["total_deposit_withdrawal"] == 3
+    assert stats["total_processed"] == 14

@@ -64,6 +64,16 @@ def read_all_records(sheet_id: str, worksheet_name: str) -> list[dict]:
     return get_worksheet(sheet_id, worksheet_name).get_all_records()
 
 
+def count_data_rows(sheet_id: str, worksheet_name: str) -> int:
+    """Count non-empty data rows in a worksheet, excluding the header row.
+
+    Reads just the first column rather than the whole sheet, so this stays
+    cheap even as a sheet grows.
+    """
+    values = get_worksheet(sheet_id, worksheet_name).col_values(1)
+    return max(len(values) - 1, 0)
+
+
 def append_records(sheet_id: str, worksheet_name: str, records: list[dict]) -> None:
     """Append rows to a worksheet, ordering values to match its existing header row.
 

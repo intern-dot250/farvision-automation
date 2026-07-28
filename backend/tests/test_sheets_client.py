@@ -96,3 +96,19 @@ def test_append_records_empty_list_returns_early(monkeypatch):
     monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
     sheets_client.append_records("sheet1", "Sheet1", [])
     mock_ws.append_rows.assert_not_called()
+
+
+def test_count_data_rows_excludes_header(monkeypatch):
+    mock_ws = MagicMock()
+    mock_ws.col_values.return_value = ["Link Ref Code", "1", "2", "3"]
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    assert sheets_client.count_data_rows("sheet1", "Sheet1") == 3
+
+
+def test_count_data_rows_header_only_returns_zero(monkeypatch):
+    mock_ws = MagicMock()
+    mock_ws.col_values.return_value = ["Link Ref Code"]
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    assert sheets_client.count_data_rows("sheet1", "Sheet1") == 0

@@ -1,7 +1,8 @@
 from collections import defaultdict
 from typing import Any
 
-from app.services import supabase_client
+from app.core.config import get_settings
+from app.services import sheets_client, supabase_client
 
 
 def list_runs(limit: int = 20) -> list[dict[str, Any]]:
@@ -48,16 +49,18 @@ def list_logs(limit: int = 100) -> list[dict[str, Any]]:
 
 
 def get_stats() -> dict[str, int]:
-    client = supabase_client.get_client()
-
-    def count(table: str, **filters: str) -> int:
-        query = client.table(table).select("id", count="exact")
-        for column, value in filters.items():
-            query = query.eq(column, value)
-        return query.execute().count or 0
+    """Stats reflect the real Google Sheets directly, not the Supabase
+    duplicate-detection ledger - Accounts only ever looks at the Sheets and
+    this dashboard, never Supabase, so the numbers shown here should match
+    exactly what's actually in the Sheets (including if rows are ever
+    manually deleted there).
+    """
+    settings = get_settings()
+    total_receipt_payment = sheets_client.count_data_rows(settings.RECEIPT_PAYMENT_SHEET_ID, "ReceiptPayment")
+    total_deposit_withdrawal = sheets_client.count_data_rows(settings.DEPOSIT_WITHDRAWAL_SHEET_ID, "DepositWithdrawal")
 
     return {
-        "total_processed": count("processed_transactions"),
-        "total_receipt_payment": count("processed_transactions", destination="receipt_payment"),
-        "total_deposit_withdrawal": count("processed_transactions", destination="deposit_withdrawal"),
+        "total_processed": total_receipt_payment + total_deposit_withdrawal,
+        "total_receipt_payment": total_receipt_payment,
+        "total_deposit_withdrawal": total_deposit_withdrawal,
     }
