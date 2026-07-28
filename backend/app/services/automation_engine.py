@@ -6,7 +6,6 @@ from app.core.config import get_settings
 from app.core.logger import logger
 from app.services import classifier, ledger_repository, ref_code, sheets_client, validation
 from app.services.classifier import ClassificationResult
-from app.services.description_parser import parse_description
 
 BANK_STATEMENT_WORKSHEET = "YES IDW 0490"
 # Identifies the bank account this statement belongs to. Hardcoded for the
@@ -93,6 +92,7 @@ def _build_receipt_payment_rows(txn: TransactionRowSet, link_ref_code: int) -> d
                 "Narration": txn.description,
                 "BankName": BANK_NAME_FOR_STATEMENT,
                 "EntryTypes": "RECEIPT / PAYMENT",
+                "Reference": txn.reference,
             }
         ],
         "ReceiptPaymentDetail": [
@@ -157,6 +157,7 @@ def _build_deposit_withdrawal_rows(txn: TransactionRowSet, link_ref_code: int) -
                 "Document No": "",
                 "BankName": BANK_NAME_FOR_STATEMENT,
                 "EntryTypes": "Deposit / Withdrawal",
+                "Reference": txn.reference,
             }
         ],
         "DepositWithdrawalDetails": [{"Link Ref Code": link_ref_code}],
@@ -183,13 +184,16 @@ def _read_bank_rows_from_sheet() -> list[dict]:
     return sheets_client.read_all_records(settings.STATEMENT_MASTER_SHEET_ID, BANK_STATEMENT_WORKSHEET)
 
 
-def _process_rows(bank_rows: list[dict], run_id: str) -> list[TransactionRowSet]:
+def _process_rows(bank_rows: list[dict], run_id: str, settings) -> list[TransactionRowSet]:
     """Classify/route raw transaction rows, regardless of source (Google
     Sheet tab or an uploaded file) — same row shape, same pipeline.
     """
-    # Batch duplicate check: single Supabase query instead of N per-row calls.
-    raw_references = [str(row.get("REFERENCE", "")).strip() for row in bank_rows]
-    existing_refs = ledger_repository.is_already_processed_batch(raw_references)
+    # Duplicate check reads the Reference column directly from both real
+    # Sheets - the Sheet is the single source of truth. A separate ledger
+    # (e.g. Supabase) can silently drift from what's actually in the Sheet
+    # (deleted rows, failed partial writes); reading the Sheet itself can't.
+    rp_refs = sheets_client.get_column_values(settings.RECEIPT_PAYMENT_SHEET_ID, "ReceiptPayment", "Reference")
+    dw_refs = sheets_client.get_column_values(settings.DEPOSIT_WITHDRAWAL_SHEET_ID, "DepositWithdrawal", "Reference")
 
     transactions = []
     for row in bank_rows:
@@ -197,44 +201,6 @@ def _process_rows(bank_rows: list[dict], run_id: str) -> list[TransactionRowSet]
         reference = str(row.get("REFERENCE", "")).strip()
 
         try:
-            if reference and reference in existing_refs:
-                logger.info(f"[{run_id}] Skipping duplicate SL#{sl_no} (reference={reference})")
-                ledger_repository.log_audit(
-                    run_id, "info", f"Skipped duplicate SL#{sl_no}", {"reference": reference}
-                )
-                original = existing_refs[reference]
-                original_dest = original.get("destination", "")
-                # The ledger only stores head/destination, not payee_name -
-                # re-derive the real payee from this row's own description
-                # (same extraction used for non-duplicate rows) rather than
-                # showing the Head category as a stand-in payee.
-                duplicate_payee_name = parse_description(row.get("DESCRIPTION", "")).payee_name
-                transactions.append(
-                    TransactionRowSet(
-                        sl_no=sl_no,
-                        reference=reference,
-                        description=row.get("DESCRIPTION", ""),
-                        debit=0,
-                        credit=0,
-                        business_unit=row.get("BUSINESS UNIT", ""),
-                        txn_date=_parse_txn_date(str(row["TXN DATE"])),
-                        classification=classifier.ClassificationResult(
-                            is_internal=False,
-                            head=original.get("head") or "",
-                            payee_name=duplicate_payee_name,
-                            matched_master_row=None,
-                            needs_review=False,
-                        ),
-                        destination="duplicate",
-                        destination_sheet="receipt/payment"
-                        if original_dest == "receipt_payment"
-                        else "deposit/withdrawal"
-                        if original_dest == "deposit_withdrawal"
-                        else None,
-                    )
-                )
-                continue
-
             description = row.get("DESCRIPTION", "")
             debit = _parse_amount(str(row.get("DEBITS", "")))
             credit = _parse_amount(str(row.get("CREDITS", "")))
@@ -242,6 +208,28 @@ def _process_rows(bank_rows: list[dict], run_id: str) -> list[TransactionRowSet]
             existing_head = str(row.get("HEAD", "")).strip()
 
             classification = classifier.classify_transaction(description, existing_head=existing_head)
+
+            if reference and (reference in rp_refs or reference in dw_refs):
+                logger.info(f"[{run_id}] Skipping duplicate SL#{sl_no} (reference={reference})")
+                ledger_repository.log_audit(
+                    run_id, "info", f"Skipped duplicate SL#{sl_no}", {"reference": reference}
+                )
+                original_dest = "receipt_payment" if reference in rp_refs else "deposit_withdrawal"
+                transactions.append(
+                    TransactionRowSet(
+                        sl_no=sl_no,
+                        reference=reference,
+                        description=description,
+                        debit=0,
+                        credit=0,
+                        business_unit=row.get("BUSINESS UNIT", ""),
+                        txn_date=txn_date,
+                        classification=classification,
+                        destination="duplicate",
+                        destination_sheet="receipt/payment" if original_dest == "receipt_payment" else "deposit/withdrawal",
+                    )
+                )
+                continue
 
             destination = (
                 "review"
@@ -355,28 +343,9 @@ def _write_transactions(transactions: list[TransactionRowSet], settings, run_id:
         logger.error(f"[{run_id}] Write to sheets failed: {exc}")
         ledger_repository.log_audit(run_id, "error", "Write to sheets failed", {"error": str(exc)})
         raise
-
-    for txn in transactions:
-        if txn.destination in ("receipt_payment", "deposit_withdrawal"):
-            link_ref_code = txn.rows.get("ReceiptPayment") or txn.rows.get("DepositWithdrawal")
-            # The sheet write above already succeeded for this transaction -
-            # a failure here is only a duplicate-detection bookkeeping issue,
-            # not a reason to fail the whole run (which already happened).
-            try:
-                ledger_repository.mark_processed(
-                    reference=txn.reference,
-                    sl_no=txn.sl_no,
-                    description=txn.description,
-                    head=txn.classification.head,
-                    destination=txn.destination,
-                    link_ref_code=link_ref_code[0]["Link Ref Code"] if link_ref_code else None,
-                )
-            except Exception as exc:
-                logger.error(f"[{run_id}] Failed to record SL#{txn.sl_no} in duplicate-detection ledger: {exc}")
-                ledger_repository.log_audit(
-                    run_id, "error", f"SL#{txn.sl_no} written to sheet but not recorded in ledger",
-                    {"reference": txn.reference, "error": str(exc)},
-                )
+    # The Sheet write above IS the record - duplicate-detection reads the
+    # Reference column straight from the Sheet on the next run, so there's
+    # no separate ledger to update here.
 
 
 def run_automation(dry_run: bool = True, rows: list[dict] | None = None) -> RunResult:
@@ -394,7 +363,7 @@ def run_automation(dry_run: bool = True, rows: list[dict] | None = None) -> RunR
     )
 
     bank_rows = rows if rows is not None else _read_bank_rows_from_sheet()
-    transactions = _process_rows(bank_rows, run_id)
+    transactions = _process_rows(bank_rows, run_id, settings)
     _assign_rows(transactions, settings, run_id)
 
     if not dry_run:

@@ -46,10 +46,14 @@ def test_deposit_withdrawal_falls_back_to_generic_label_when_no_name_extracted()
     assert ledger["Payee Name"] == "Internal Transfer"
 
 
-def test_duplicate_transaction_shows_real_payee_not_head_category():
-    # The ledger only stores head/destination for a duplicate match, not a
-    # payee name - the real name should be re-derived from this row's own
-    # description, not shown as the Head category (e.g. "Contractor").
+class _FakeSettings:
+    RECEIPT_PAYMENT_SHEET_ID = "rp-sheet-id"
+    DEPOSIT_WITHDRAWAL_SHEET_ID = "dw-sheet-id"
+
+
+def test_duplicate_transaction_is_detected_directly_from_the_sheet():
+    # Duplicate-detection reads the Reference column straight from the real
+    # Sheet, not a separate ledger that could drift out of sync with it.
     bank_rows = [
         {
             "SL#": "336",
@@ -62,14 +66,49 @@ def test_duplicate_transaction_shows_real_payee_not_head_category():
         }
     ]
 
+    def fake_get_column_values(sheet_id, worksheet_name, column):
+        if worksheet_name == "ReceiptPayment":
+            return {"YESME6203001855300"}
+        return set()
+
     with patch(
-        "app.services.automation_engine.ledger_repository.is_already_processed_batch",
-        return_value={"YESME6203001855300": {"head": "Contractor", "destination": "receipt_payment"}},
-    ), patch("app.services.automation_engine.ledger_repository.log_audit"):
-        transactions = _process_rows(bank_rows, run_id="test-run")
+        "app.services.automation_engine.sheets_client.get_column_values",
+        side_effect=fake_get_column_values,
+    ), patch("app.services.automation_engine.ledger_repository.log_audit"), patch(
+        "app.services.automation_engine.classifier.master_repository.find_party",
+        return_value={"Account Head": "Rakiba BIBI", "Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS"},
+    ):
+        transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
 
     assert len(transactions) == 1
     txn = transactions[0]
     assert txn.destination == "duplicate"
+    assert txn.destination_sheet == "receipt/payment"
     assert txn.classification.head == "Contractor"
     assert txn.classification.payee_name == "Rakiba BIBI"
+
+
+def test_non_duplicate_transaction_when_reference_absent_from_both_sheets():
+    bank_rows = [
+        {
+            "SL#": "1",
+            "REFERENCE": "NEWREF001",
+            "DESCRIPTION": "YIB-NEFT-NEWREF001-Rakiba BIBI-SBIN0007204-Contractor-STATE BANK OF INDIA",
+            "TXN DATE": "22-Jul-2026",
+            "DEBITS": "1000",
+            "CREDITS": "",
+            "BUSINESS UNIT": "Casa Romana",
+        }
+    ]
+
+    with patch(
+        "app.services.automation_engine.sheets_client.get_column_values",
+        return_value=set(),
+    ), patch(
+        "app.services.automation_engine.classifier.master_repository.find_party",
+        return_value={"Account Head": "Rakiba BIBI", "Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS"},
+    ):
+        transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
+
+    assert len(transactions) == 1
+    assert transactions[0].destination == "receipt_payment"
