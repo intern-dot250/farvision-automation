@@ -47,7 +47,15 @@ def get_client() -> gspread.Client:
     return gspread.authorize(credentials)
 
 
+@lru_cache
 def open_sheet(sheet_id: str) -> gspread.Spreadsheet:
+    """Cached per sheet_id: opening a spreadsheet fetches its full metadata
+    (1 API read), and every call site opens the same handful of sheet IDs
+    repeatedly - reusing the same Spreadsheet object avoids redundant reads
+    against Google's per-minute quota. Worksheet content reads (col_values,
+    get_all_values, etc.) are never cached - only the "which spreadsheet is
+    this" lookup is safe to reuse, since tab names/IDs don't change here.
+    """
     return get_client().open_by_key(sheet_id)
 
 
