@@ -21,7 +21,9 @@ def _parse_amount(value: str) -> float:
 # "%d-%b-%Y" matches the Google Sheet / CSV text format ("22-Jul-2026").
 # "%Y-%m-%d %H:%M:%S" / "%Y-%m-%d" match native Excel date cells, which
 # pandas stringifies this way even when read with dtype=str.
-_TXN_DATE_FORMATS = ("%d-%b-%Y", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d")
+# "%d/%m/%Y" matches some rows stored as plain text in real statements
+# ("28/03/2026") rather than native Excel date cells.
+_TXN_DATE_FORMATS = ("%d-%b-%Y", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%d/%m/%Y")
 
 
 def _parse_txn_date(value: str) -> datetime:
