@@ -56,7 +56,6 @@ def test_get_stats_aggregates_counts():
         make_count(15),
         make_count(11),
         make_count(3),
-        make_count(2),
     ]
 
     with patch("app.services.history_repository.supabase_client.get_client", return_value=mock_client):
@@ -65,4 +64,3 @@ def test_get_stats_aggregates_counts():
     assert stats["total_processed"] == 15
     assert stats["total_receipt_payment"] == 11
     assert stats["total_deposit_withdrawal"] == 3
-    assert stats["total_runs"] == 2

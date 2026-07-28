@@ -24,7 +24,6 @@ export type StatsSummary = {
   total_processed: number;
   total_receipt_payment: number;
   total_deposit_withdrawal: number;
-  total_runs: number;
 };
 
 export function getRuns(limit = 20): Promise<RunSummary[]> {

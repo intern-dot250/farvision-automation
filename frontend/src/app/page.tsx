@@ -67,7 +67,7 @@ export default function DashboardPage() {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <Card title="Total Processed">
           <p className="text-2xl font-semibold text-zinc-900 dark:text-zinc-100">
             {statsError ? "—" : (stats?.total_processed ?? "…")}
@@ -102,11 +102,6 @@ export default function DashboardPage() {
               Open sheet ↗
             </a>
           )}
-        </Card>
-        <Card title="Total Runs">
-          <p className="text-2xl font-semibold text-zinc-900 dark:text-zinc-100">
-            {statsError ? "—" : (stats?.total_runs ?? "…")}
-          </p>
         </Card>
       </div>
 

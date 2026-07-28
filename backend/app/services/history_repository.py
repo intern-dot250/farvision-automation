@@ -60,5 +60,4 @@ def get_stats() -> dict[str, int]:
         "total_processed": count("processed_transactions"),
         "total_receipt_payment": count("processed_transactions", destination="receipt_payment"),
         "total_deposit_withdrawal": count("processed_transactions", destination="deposit_withdrawal"),
-        "total_runs": count("audit_log", message="Automation run started"),
     }

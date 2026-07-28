@@ -27,4 +27,3 @@ class StatsSummary(BaseModel):
     total_processed: int
     total_receipt_payment: int
     total_deposit_withdrawal: int
-    total_runs: int
