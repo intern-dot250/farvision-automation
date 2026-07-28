@@ -11,6 +11,7 @@ def test_internal_transfer_classified_as_internal():
     assert result.is_internal is True
     assert result.head == "Internal"
     assert result.needs_review is False
+    assert result.payee_name == "DWARKADHIS PROJECTS PRIVATE LIMITED IN CIRP CR"
 
 
 def test_matched_payee_classified_by_parent_account_head():
@@ -72,6 +73,7 @@ def test_existing_head_internal_short_circuits_master_lookup():
     mock_find.assert_not_called()
     assert result.is_internal is True
     assert result.head == "Internal"
+    assert result.payee_name == "DWARKADHIS PROJECTS PRIVATE LIMITED IN CIRP CR"
 
 
 def test_existing_head_with_no_master_match_still_flagged_for_review():

@@ -27,7 +27,14 @@ def parse_description(description: str) -> ParsedDescription:
     )
 
     if ifsc_index is None:
-        return ParsedDescription(payee_name=None, ifsc=None, is_internal_format=True)
+        # Internal transfers (mode=TPT) still name the counterparty entity in
+        # the description ("YIB-TPT-Dwarkadhis Projects Pvt Ltd...-045563...")
+        # - extract it for display, without changing the Internal
+        # classification, which stays based on the missing IFSC alone.
+        internal_name = None
+        if len(tokens) >= 4 and tokens[1].strip().upper() == "TPT":
+            internal_name = tokens[2].strip() or None
+        return ParsedDescription(payee_name=internal_name, ifsc=None, is_internal_format=True)
 
     # Everything between the UTR (index 2) and the IFSC token is the payee name.
     payee_tokens = tokens[3:ifsc_index]

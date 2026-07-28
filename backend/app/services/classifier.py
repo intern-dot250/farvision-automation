@@ -45,7 +45,7 @@ def classify_transaction(description: str, existing_head: str | None = None) -> 
             return ClassificationResult(
                 is_internal=True,
                 head="Internal",
-                payee_name=None,
+                payee_name=parsed.payee_name,
                 matched_master_row=None,
                 needs_review=False,
             )
@@ -67,7 +67,7 @@ def classify_transaction(description: str, existing_head: str | None = None) -> 
         return ClassificationResult(
             is_internal=True,
             head="Internal",
-            payee_name=None,
+            payee_name=parsed.payee_name,
             matched_master_row=None,
             needs_review=False,
         )
