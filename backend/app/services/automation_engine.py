@@ -187,7 +187,7 @@ def _process_rows(bank_rows: list[dict], run_id: str) -> list[TransactionRowSet]
         reference = str(row.get("REFERENCE", "")).strip()
 
         try:
-            if reference in existing_refs:
+            if reference and reference in existing_refs:
                 logger.info(f"[{run_id}] Skipping duplicate SL#{sl_no} (reference={reference})")
                 ledger_repository.log_audit(
                     run_id, "info", f"Skipped duplicate SL#{sl_no}", {"reference": reference}
@@ -333,14 +333,24 @@ def _write_transactions(transactions: list[TransactionRowSet], settings, run_id:
     for txn in transactions:
         if txn.destination in ("receipt_payment", "deposit_withdrawal"):
             link_ref_code = txn.rows.get("ReceiptPayment") or txn.rows.get("DepositWithdrawal")
-            ledger_repository.mark_processed(
-                reference=txn.reference,
-                sl_no=txn.sl_no,
-                description=txn.description,
-                head=txn.classification.head,
-                destination=txn.destination,
-                link_ref_code=link_ref_code[0]["Link Ref Code"] if link_ref_code else None,
-            )
+            # The sheet write above already succeeded for this transaction -
+            # a failure here is only a duplicate-detection bookkeeping issue,
+            # not a reason to fail the whole run (which already happened).
+            try:
+                ledger_repository.mark_processed(
+                    reference=txn.reference,
+                    sl_no=txn.sl_no,
+                    description=txn.description,
+                    head=txn.classification.head,
+                    destination=txn.destination,
+                    link_ref_code=link_ref_code[0]["Link Ref Code"] if link_ref_code else None,
+                )
+            except Exception as exc:
+                logger.error(f"[{run_id}] Failed to record SL#{txn.sl_no} in duplicate-detection ledger: {exc}")
+                ledger_repository.log_audit(
+                    run_id, "error", f"SL#{txn.sl_no} written to sheet but not recorded in ledger",
+                    {"reference": txn.reference, "error": str(exc)},
+                )
 
 
 def run_automation(dry_run: bool = True, rows: list[dict] | None = None) -> RunResult:

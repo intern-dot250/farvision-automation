@@ -58,3 +58,37 @@ def test_mark_processed_inserts_expected_row():
     insert_args = mock_client.table.return_value.insert.call_args[0][0]
     assert insert_args["reference"] == "YESME123"
     assert insert_args["link_ref_code"] == 5
+
+
+def test_mark_processed_stores_blank_reference_as_null():
+    mock_client = MagicMock()
+
+    with patch("app.services.ledger_repository.supabase_client.get_client", return_value=mock_client):
+        ledger_repository.mark_processed(
+            reference="",
+            sl_no="1",
+            description="B/F ...",
+            head="",
+            destination="deposit_withdrawal",
+            link_ref_code=None,
+        )
+
+    insert_args = mock_client.table.return_value.insert.call_args[0][0]
+    assert insert_args["reference"] is None
+
+
+def test_is_already_processed_batch_excludes_blank_references():
+    mock_response = MagicMock()
+    mock_response.data = [{"reference": "YESME123"}]
+
+    mock_client = MagicMock()
+    mock_client.table.return_value.select.return_value.in_.return_value.execute.return_value = (
+        mock_response
+    )
+
+    with patch("app.services.ledger_repository.supabase_client.get_client", return_value=mock_client):
+        result = ledger_repository.is_already_processed_batch(["", "", "YESME123"])
+
+    called_with = mock_client.table.return_value.select.return_value.in_.call_args[0][1]
+    assert "" not in called_with
+    assert result == {"YESME123"}
