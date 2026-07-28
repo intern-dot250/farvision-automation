@@ -1,6 +1,4 @@
-from app.services import supabase_client
-
-
+import uuid
 from typing import Set
 
 from app.services import supabase_client
@@ -36,13 +34,14 @@ def mark_processed(
     destination: str,
     link_ref_code: int | None,
 ) -> None:
-    # Store blank references as NULL rather than "": the reference column is
-    # UNIQUE, and Postgres allows unlimited NULLs under a UNIQUE constraint
-    # but only one "" - multiple transactions can legitimately have no
-    # reference number.
+    # reference is NOT NULL and UNIQUE. Transactions without a bank reference
+    # number (e.g. some internal transfers) can't share a blank value, so
+    # give each one a synthetic, guaranteed-unique placeholder instead. It's
+    # never looked up (is_already_processed_batch excludes blank references
+    # from its query), so it only needs to satisfy the constraint.
     supabase_client.get_client().table("processed_transactions").insert(
         {
-            "reference": reference or None,
+            "reference": reference or f"__no-reference__{uuid.uuid4()}",
             "sl_no": sl_no,
             "description": description,
             "head": head,

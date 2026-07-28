@@ -60,7 +60,7 @@ def test_mark_processed_inserts_expected_row():
     assert insert_args["link_ref_code"] == 5
 
 
-def test_mark_processed_stores_blank_reference_as_null():
+def test_mark_processed_generates_unique_placeholder_for_blank_reference():
     mock_client = MagicMock()
 
     with patch("app.services.ledger_repository.supabase_client.get_client", return_value=mock_client):
@@ -72,9 +72,18 @@ def test_mark_processed_stores_blank_reference_as_null():
             destination="deposit_withdrawal",
             link_ref_code=None,
         )
+        ledger_repository.mark_processed(
+            reference="",
+            sl_no="2",
+            description="B/F ...",
+            head="",
+            destination="deposit_withdrawal",
+            link_ref_code=None,
+        )
 
-    insert_args = mock_client.table.return_value.insert.call_args[0][0]
-    assert insert_args["reference"] is None
+    inserted = [c.args[0]["reference"] for c in mock_client.table.return_value.insert.call_args_list]
+    assert all(ref for ref in inserted)
+    assert len(set(inserted)) == 2
 
 
 def test_is_already_processed_batch_excludes_blank_references():
