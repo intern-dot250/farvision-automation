@@ -138,6 +138,11 @@ def _build_deposit_withdrawal_rows(txn: TransactionRowSet, link_ref_code: int) -
     debit_credit = "Debit" if txn.debit else "Credit"
     doc_date = txn.txn_date.strftime("%d/%m/%Y")
     financial_year = _financial_year(txn.txn_date)
+    # The description usually names the counterparty entity even for
+    # internal transfers - use it when available, otherwise fall back to
+    # the generic label (e.g. non-TPT internal formats with no extractable
+    # name).
+    payee_display = txn.classification.payee_name or "Internal Transfer"
 
     return {
         "DepositWithdrawal": [
@@ -158,14 +163,15 @@ def _build_deposit_withdrawal_rows(txn: TransactionRowSet, link_ref_code: int) -
             {
                 "Link Ref Code": link_ref_code,
                 "Debit/Credit": debit_credit,
-                # Best-effort default: no Master match exists for internal
-                # transfers, so there's no real party name to use here.
+                # Head stays the category label ("Internal Transfer") even
+                # though Payee Name below may show the actual counterparty -
+                # no Master match/category exists for internal transfers.
                 "Account Head": "Internal Transfer",
                 "Parent Account Head": "Internal Transfer",
                 "Debit Amount": _format_amount(txn.debit),
                 "Credit Amount": _format_amount(txn.credit),
                 "Payment Mode": "Direct",
-                "Payee Name": "Internal Transfer",
+                "Payee Name": payee_display,
             }
         ],
     }
