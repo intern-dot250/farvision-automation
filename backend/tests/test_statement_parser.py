@@ -3,7 +3,7 @@ import io
 import pandas as pd
 import pytest
 
-from app.services.statement_parser import parse_statement_file
+from app.services.statement_parser import list_candidate_sheets, parse_statement_file
 
 
 def test_parses_csv_with_required_columns():
@@ -97,3 +97,17 @@ def test_unknown_sheet_name_lists_available_sheets():
 
     with pytest.raises(ValueError, match="not found in uploaded file"):
         parse_statement_file("statement.xlsx", content, sheet_name="Nonexistent Tab")
+
+
+def test_list_candidate_sheets_returns_only_matching_tabs():
+    content = _two_sheet_workbook()
+
+    result = list_candidate_sheets("statement.xlsx", content)
+
+    assert result == ["YES Rera 0377"]
+
+
+def test_list_candidate_sheets_empty_for_csv():
+    result = list_candidate_sheets("statement.csv", b"a,b\n1,2\n")
+
+    assert result == []

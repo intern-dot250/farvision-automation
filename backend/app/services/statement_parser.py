@@ -35,6 +35,19 @@ def _resolve_sheet_name(requested: str, available: list[str]) -> str | None:
     return None
 
 
+def list_candidate_sheets(filename: str, content: bytes) -> list[str]:
+    """Sheet names in an uploaded workbook that actually contain transaction
+    data (same header-detection used by parse_statement_file), so the
+    frontend can offer a dropdown of real choices instead of the user
+    guessing a tab name after a failed upload. CSV files have no sheets.
+    """
+    if filename.lower().endswith(".csv"):
+        return []
+
+    sheets = pd.read_excel(io.BytesIO(content), dtype=str, header=None, sheet_name=None)
+    return [name for name, raw in sheets.items() if _find_header_row(raw) is not None]
+
+
 def parse_statement_file(filename: str, content: bytes, sheet_name: str | None = None) -> list[dict]:
     """Parse an uploaded bank statement file into the same row-shape used
     when reading from the Google Sheet (same column names), so it can feed

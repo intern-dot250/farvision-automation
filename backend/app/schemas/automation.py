@@ -22,3 +22,7 @@ class RunResponse(BaseModel):
     needs_review: int
     duplicates_skipped: int
     transactions: list[TransactionSummary]
+
+
+class SheetNamesResponse(BaseModel):
+    sheets: list[str]

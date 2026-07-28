@@ -1,7 +1,7 @@
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from app.core.constants import Tags
-from app.schemas.automation import RunResponse, TransactionSummary
+from app.schemas.automation import RunResponse, SheetNamesResponse, TransactionSummary
 from app.services import automation_engine, statement_parser
 
 router = APIRouter(prefix="/automation", tags=[Tags.AUTOMATION])
@@ -31,6 +31,20 @@ def _build_run_response(result: automation_engine.RunResult) -> RunResponse:
             for txn in result.transactions
         ],
     )
+
+
+@router.post(
+    "/sheet-names",
+    response_model=SheetNamesResponse,
+    summary="List the sheet/tab names in an uploaded workbook that contain transaction data",
+)
+async def list_sheet_names(file: UploadFile = File(...)) -> SheetNamesResponse:
+    content = await file.read()
+    try:
+        sheets = statement_parser.list_candidate_sheets(file.filename or "", content)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return SheetNamesResponse(sheets=sheets)
 
 
 @router.post("/run", response_model=RunResponse, summary="Run the automation engine against the configured Google Sheet")

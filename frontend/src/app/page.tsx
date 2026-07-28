@@ -4,7 +4,11 @@ import { useEffect, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { getStats, type StatsSummary } from "@/lib/api/history";
-import { runAutomationUpload, type RunResponse } from "@/lib/api/automation";
+import {
+  getSheetNames,
+  runAutomationUpload,
+  type RunResponse,
+} from "@/lib/api/automation";
 import { getSheetsStatus } from "@/lib/api/sheets";
 
 export default function DashboardPage() {
@@ -17,6 +21,8 @@ export default function DashboardPage() {
   const [result, setResult] = useState<RunResponse | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [sheetName, setSheetName] = useState("");
+  const [sheetOptions, setSheetOptions] = useState<string[]>([]);
+  const [sheetOptionsLoading, setSheetOptionsLoading] = useState(false);
 
   const loadStats = () => {
     getStats()
@@ -39,6 +45,29 @@ export default function DashboardPage() {
       })
       .catch(() => {});
   }, []);
+
+  const handleFileChange = (selected: File | null) => {
+    setFile(selected);
+    setResult(null);
+    setRunError(null);
+    setSheetName("");
+    setSheetOptions([]);
+
+    if (!selected || !/\.xlsx?$/i.test(selected.name)) {
+      return;
+    }
+
+    setSheetOptionsLoading(true);
+    getSheetNames(selected)
+      .then((data) => {
+        setSheetOptions(data.sheets);
+        if (data.sheets.length === 1) {
+          setSheetName(data.sheets[0]);
+        }
+      })
+      .catch(() => setSheetOptions([]))
+      .finally(() => setSheetOptionsLoading(false));
+  };
 
   const handleRun = async () => {
     if (!file) return;
@@ -115,10 +144,37 @@ export default function DashboardPage() {
               type="file"
               accept=".xlsx,.xls,.csv"
               disabled={running}
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              onChange={(e) => handleFileChange(e.target.files?.[0] ?? null)}
               className="text-sm text-zinc-600 file:mr-3 file:rounded-md file:border-0 file:bg-zinc-900 file:px-3 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-zinc-700 dark:text-zinc-400 dark:file:bg-zinc-100 dark:file:text-zinc-900 dark:hover:file:bg-zinc-300"
             />
           </label>
+
+          {sheetOptionsLoading && (
+            <p className="text-sm text-zinc-500 dark:text-zinc-400">
+              Reading sheet names…
+            </p>
+          )}
+
+          {!sheetOptionsLoading && sheetOptions.length > 1 && (
+            <label className="flex flex-col gap-1">
+              <span className="text-sm text-zinc-600 dark:text-zinc-400">
+                This file has transaction data on multiple sheets - choose which one to use
+              </span>
+              <select
+                value={sheetName}
+                onChange={(e) => setSheetName(e.target.value)}
+                disabled={running}
+                className="w-fit rounded-md border border-zinc-300 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+              >
+                <option value="">Select a sheet…</option>
+                {sheetOptions.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
 
           <label className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-400">
             <input
@@ -132,7 +188,7 @@ export default function DashboardPage() {
 
           <button
             onClick={handleRun}
-            disabled={running || !file}
+            disabled={running || !file || (sheetOptions.length > 1 && !sheetName)}
             className="w-fit rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
           >
             {running
