@@ -25,6 +25,16 @@ def _apply_header(raw: pd.DataFrame, header_row: int) -> pd.DataFrame:
     return df
 
 
+def _resolve_sheet_name(requested: str, available: list[str]) -> str | None:
+    """Match a requested sheet/tab name case- and whitespace-insensitively
+    (e.g. "YES RERA 0377" should still find "YES Rera 0377")."""
+    key = " ".join(requested.strip().upper().split())
+    for name in available:
+        if " ".join(name.strip().upper().split()) == key:
+            return name
+    return None
+
+
 def parse_statement_file(filename: str, content: bytes, sheet_name: str | None = None) -> list[dict]:
     """Parse an uploaded bank statement file into the same row-shape used
     when reading from the Google Sheet (same column names), so it can feed
@@ -47,12 +57,13 @@ def parse_statement_file(filename: str, content: bytes, sheet_name: str | None =
         sheets = pd.read_excel(io.BytesIO(content), dtype=str, header=None, sheet_name=None)
 
         if sheet_name is not None:
-            if sheet_name not in sheets:
+            resolved_name = _resolve_sheet_name(sheet_name, list(sheets.keys()))
+            if resolved_name is None:
                 raise ValueError(f"Sheet '{sheet_name}' not found in uploaded file. Available sheets: {', '.join(sheets.keys())}")
-            header_row = _find_header_row(sheets[sheet_name])
+            header_row = _find_header_row(sheets[resolved_name])
             if header_row is None:
-                raise ValueError(f"Sheet '{sheet_name}' is missing required columns: {', '.join(REQUIRED_COLUMNS)}")
-            df = _apply_header(sheets[sheet_name], header_row)
+                raise ValueError(f"Sheet '{resolved_name}' is missing required columns: {', '.join(REQUIRED_COLUMNS)}")
+            df = _apply_header(sheets[resolved_name], header_row)
         else:
             matches: dict[str, pd.DataFrame] = {}
             for name, raw in sheets.items():
