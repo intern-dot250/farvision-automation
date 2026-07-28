@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 
@@ -69,7 +69,10 @@ def append_records(sheet_id: str, worksheet_name: str, records: list[dict]) -> N
 
     Numeric columns (Link Ref Code, Detail Link Ref Code) are written as integers
     so Sheets right-aligns them. Date columns (Document Date, Invoice Date) are
-    parsed from DD/MM/YYYY and written as date values.
+    parsed from DD/MM/YYYY and written as ISO date strings ("YYYY-MM-DD") -
+    Sheets still recognizes these as real dates and right-aligns them with
+    USER_ENTERED, but unlike a native `date` object, a string is JSON
+    serializable when gspread sends the write request.
     """
     if not records:
         return
@@ -85,7 +88,7 @@ def append_records(sheet_id: str, worksheet_name: str, records: list[dict]) -> N
                 return value
         if column in DATE_COLUMNS:
             try:
-                return datetime.strptime(value, "%d/%m/%Y").date()
+                return datetime.strptime(value, "%d/%m/%Y").date().isoformat()
             except (ValueError, TypeError):
                 return value
         return value
