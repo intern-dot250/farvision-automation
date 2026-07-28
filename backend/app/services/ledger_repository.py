@@ -6,7 +6,7 @@ from app.services import supabase_client
 
 def is_already_processed_batch(references: list[str]) -> dict[str, dict[str, str | None]]:
     """Batch duplicate-detection: returns a mapping of already-processed
-    references to their stored metadata (head, payee_name, destination).
+    references to their stored metadata (head, destination).
 
     Does a single Supabase query instead of N individual calls. Blank
     references are excluded - transactions without a bank reference number
@@ -20,14 +20,13 @@ def is_already_processed_batch(references: list[str]) -> dict[str, dict[str, str
     response = (
         supabase_client.get_client()
         .table("processed_transactions")
-        .select("reference, head, payee_name, destination")
+        .select("reference, head, destination")
         .in_("reference", references)
         .execute()
     )
     return {
         row["reference"]: {
             "head": row.get("head"),
-            "payee_name": row.get("payee_name"),
             "destination": row.get("destination"),
         }
         for row in (response.data or [])

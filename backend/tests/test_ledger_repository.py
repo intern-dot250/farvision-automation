@@ -6,8 +6,8 @@ from app.services import ledger_repository
 def test_is_already_processed_batch_returns_matched_refs_with_metadata():
     mock_response = MagicMock()
     mock_response.data = [
-        {"reference": "YESME123", "head": "Contractor", "payee_name": "Nasim", "destination": "receipt_payment"},
-        {"reference": "YESME456", "head": "Vendor", "payee_name": "Acme Corp", "destination": "receipt_payment"},
+        {"reference": "YESME123", "head": "Contractor", "destination": "receipt_payment"},
+        {"reference": "YESME456", "head": "Vendor", "destination": "receipt_payment"},
     ]
 
     mock_client = MagicMock()
@@ -20,8 +20,7 @@ def test_is_already_processed_batch_returns_matched_refs_with_metadata():
 
     assert "YESME123" in result
     assert result["YESME123"]["head"] == "Contractor"
-    assert result["YESME123"]["payee_name"] == "Nasim"
-    assert result["YESME456"]["destination"] == "receipt_payment"
+    assert result["YESME123"]["destination"] == "receipt_payment"
 
 
 def test_is_already_processed_batch_returns_empty_dict_for_no_matches():
@@ -91,7 +90,7 @@ def test_mark_processed_generates_unique_placeholder_for_blank_reference():
 
 def test_is_already_processed_batch_excludes_blank_references():
     mock_response = MagicMock()
-    mock_response.data = [{"reference": "YESME123", "head": "", "payee_name": None, "destination": ""}]
+    mock_response.data = [{"reference": "YESME123", "head": "", "destination": ""}]
 
     mock_client = MagicMock()
     mock_client.table.return_value.select.return_value.in_.return_value.execute.return_value = (
