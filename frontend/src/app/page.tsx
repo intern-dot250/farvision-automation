@@ -5,10 +5,12 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { getStats, type StatsSummary } from "@/lib/api/history";
 import { runAutomationUpload, type RunResponse } from "@/lib/api/automation";
+import { getSheetsStatus } from "@/lib/api/sheets";
 
 export default function DashboardPage() {
   const [stats, setStats] = useState<StatsSummary | null>(null);
   const [statsError, setStatsError] = useState(false);
+  const [sheetLinks, setSheetLinks] = useState<Record<string, string>>({});
   const [file, setFile] = useState<File | null>(null);
   const [dryRun, setDryRun] = useState(true);
   const [running, setRunning] = useState(false);
@@ -27,6 +29,15 @@ export default function DashboardPage() {
 
   useEffect(() => {
     loadStats();
+    getSheetsStatus()
+      .then((data) => {
+        const links: Record<string, string> = {};
+        for (const sheet of data.sheets) {
+          links[sheet.name] = `https://docs.google.com/spreadsheets/d/${sheet.sheet_id}/edit`;
+        }
+        setSheetLinks(links);
+      })
+      .catch(() => {});
   }, []);
 
   const handleRun = async () => {
@@ -66,11 +77,31 @@ export default function DashboardPage() {
           <p className="text-2xl font-semibold text-zinc-900 dark:text-zinc-100">
             {statsError ? "—" : (stats?.total_receipt_payment ?? "…")}
           </p>
+          {sheetLinks["Receipt / Payment"] && (
+            <a
+              href={sheetLinks["Receipt / Payment"]}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-1 inline-block text-xs text-blue-600 hover:underline dark:text-blue-400"
+            >
+              Open sheet ↗
+            </a>
+          )}
         </Card>
         <Card title="Deposit/Withdrawal">
           <p className="text-2xl font-semibold text-zinc-900 dark:text-zinc-100">
             {statsError ? "—" : (stats?.total_deposit_withdrawal ?? "…")}
           </p>
+          {sheetLinks["Deposit / Withdrawal"] && (
+            <a
+              href={sheetLinks["Deposit / Withdrawal"]}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-1 inline-block text-xs text-blue-600 hover:underline dark:text-blue-400"
+            >
+              Open sheet ↗
+            </a>
+          )}
         </Card>
         <Card title="Total Runs">
           <p className="text-2xl font-semibold text-zinc-900 dark:text-zinc-100">
