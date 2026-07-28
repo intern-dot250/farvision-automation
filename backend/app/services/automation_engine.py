@@ -6,6 +6,7 @@ from app.core.config import get_settings
 from app.core.logger import logger
 from app.services import classifier, ledger_repository, ref_code, sheets_client, validation
 from app.services.classifier import ClassificationResult
+from app.services.description_parser import parse_description
 
 BANK_STATEMENT_WORKSHEET = "YES IDW 0490"
 # Identifies the bank account this statement belongs to. Hardcoded for the
@@ -203,6 +204,11 @@ def _process_rows(bank_rows: list[dict], run_id: str) -> list[TransactionRowSet]
                 )
                 original = existing_refs[reference]
                 original_dest = original.get("destination", "")
+                # The ledger only stores head/destination, not payee_name -
+                # re-derive the real payee from this row's own description
+                # (same extraction used for non-duplicate rows) rather than
+                # showing the Head category as a stand-in payee.
+                duplicate_payee_name = parse_description(row.get("DESCRIPTION", "")).payee_name
                 transactions.append(
                     TransactionRowSet(
                         sl_no=sl_no,
@@ -215,7 +221,7 @@ def _process_rows(bank_rows: list[dict], run_id: str) -> list[TransactionRowSet]
                         classification=classifier.ClassificationResult(
                             is_internal=False,
                             head=original.get("head") or "",
-                            payee_name=original.get("head"),
+                            payee_name=duplicate_payee_name,
                             matched_master_row=None,
                             needs_review=False,
                         ),
