@@ -1,3 +1,4 @@
+from datetime import date, datetime
 from functools import lru_cache
 from pathlib import Path
 
@@ -64,11 +65,35 @@ def read_all_records(sheet_id: str, worksheet_name: str) -> list[dict]:
 
 
 def append_records(sheet_id: str, worksheet_name: str, records: list[dict]) -> None:
-    """Append rows to a worksheet, ordering values to match its existing header row."""
+    """Append rows to a worksheet, ordering values to match its existing header row.
+
+    Numeric columns (Link Ref Code, Detail Link Ref Code) are written as integers
+    so Sheets right-aligns them. Date columns (Document Date, Invoice Date) are
+    parsed from DD/MM/YYYY and written as date values.
+    """
     if not records:
         return
 
+    INT_COLUMNS = {"Link Ref Code", "Detail Link Ref Code"}
+    DATE_COLUMNS = {"Document Date", "Invoice Date"}
+
+    def _coerce(value: str, column: str):
+        if column in INT_COLUMNS:
+            try:
+                return int(value)
+            except (ValueError, TypeError):
+                return value
+        if column in DATE_COLUMNS:
+            try:
+                return datetime.strptime(value, "%d/%m/%Y").date()
+            except (ValueError, TypeError):
+                return value
+        return value
+
     worksheet = get_worksheet(sheet_id, worksheet_name)
     header = worksheet.row_values(1)
-    rows = [[str(record.get(column, "")) for column in header] for record in records]
+    rows = [
+        [_coerce(record.get(column, ""), column) for column in header]
+        for record in records
+    ]
     worksheet.append_rows(rows, value_input_option="USER_ENTERED")
