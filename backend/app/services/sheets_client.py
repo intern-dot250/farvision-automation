@@ -74,6 +74,20 @@ def count_data_rows(sheet_id: str, worksheet_name: str) -> int:
     return max(len(values) - 1, 0)
 
 
+def get_column_values(sheet_id: str, worksheet_name: str, column: str) -> set[str]:
+    """Non-empty values in a named column (excluding the header), reading
+    just that one column rather than the whole sheet. Returns an empty set
+    if the column doesn't exist in this worksheet.
+    """
+    worksheet = get_worksheet(sheet_id, worksheet_name)
+    header = worksheet.row_values(1)
+    if column not in header:
+        return set()
+    col_index = header.index(column) + 1  # gspread columns are 1-indexed
+    values = worksheet.col_values(col_index)[1:]
+    return {v.strip() for v in values if v.strip()}
+
+
 def append_records(sheet_id: str, worksheet_name: str, records: list[dict]) -> None:
     """Append rows to a worksheet, ordering values to match its existing header row.
 

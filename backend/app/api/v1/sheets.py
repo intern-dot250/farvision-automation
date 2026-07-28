@@ -2,8 +2,8 @@ from fastapi import APIRouter
 
 from app.core.config import get_settings
 from app.core.constants import Tags
-from app.schemas.sheets import SheetConnectionStatus, SheetsStatusResponse
-from app.services import sheets_client
+from app.schemas.sheets import OrphanCheckResponse, SheetConnectionStatus, SheetsStatusResponse
+from app.services import orphan_checker, sheets_client
 
 router = APIRouter(prefix="/sheets", tags=[Tags.SHEETS])
 
@@ -38,3 +38,12 @@ def get_sheets_status() -> SheetsStatusResponse:
             )
 
     return SheetsStatusResponse(sheets=results)
+
+
+@router.get(
+    "/orphans",
+    response_model=OrphanCheckResponse,
+    summary="Find Link Ref Codes present in some but not all linked tabs (e.g. from a manual row deletion)",
+)
+def get_orphan_report() -> OrphanCheckResponse:
+    return OrphanCheckResponse(reports=orphan_checker.check_all_orphans())

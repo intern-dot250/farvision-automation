@@ -112,3 +112,24 @@ def test_count_data_rows_header_only_returns_zero(monkeypatch):
     monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
 
     assert sheets_client.count_data_rows("sheet1", "Sheet1") == 0
+
+
+def test_get_column_values_returns_non_empty_values(monkeypatch):
+    mock_ws = MagicMock()
+    mock_ws.row_values.return_value = ["Link Ref Code", "Business Unit"]
+    mock_ws.col_values.return_value = ["Link Ref Code", "1", "2", "", "3"]
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    result = sheets_client.get_column_values("sheet1", "Sheet1", "Link Ref Code")
+
+    assert result == {"1", "2", "3"}
+
+
+def test_get_column_values_missing_column_returns_empty_set(monkeypatch):
+    mock_ws = MagicMock()
+    mock_ws.row_values.return_value = ["Business Unit"]
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    result = sheets_client.get_column_values("sheet1", "Sheet1", "Link Ref Code")
+
+    assert result == set()
