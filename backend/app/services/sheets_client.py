@@ -155,6 +155,15 @@ def append_records(sheet_id: str, worksheet_name: str, records: list[dict]) -> N
     get silently reformatted to ISO ("YYYY-MM-DD"). A plain string is always
     JSON serializable, unlike a native `date` object (which previously broke
     real writes).
+
+    Uses RAW input mode, not USER_ENTERED: Sheets' "smart parsing" under
+    USER_ENTERED inconsistently converts some Indian-grouped amount strings
+    (e.g. "10,395") into real numbers - inheriting that column's pre-existing
+    Western "#,##0.00" cell format and reintroducing decimals - while others
+    (e.g. "2,00,000") fail to parse and stay text, causing inconsistent
+    number/text alignment. RAW keeps every string exactly as given; integer
+    values (Link Ref Code) are unaffected either way, since they're sent as
+    real JSON numbers rather than strings.
     """
     if not records:
         return
@@ -183,4 +192,4 @@ def append_records(sheet_id: str, worksheet_name: str, records: list[dict]) -> N
         [_coerce(record.get(column, ""), column) for column in header]
         for record in records
     ]
-    worksheet.append_rows(rows, value_input_option="USER_ENTERED")
+    worksheet.append_rows(rows, value_input_option="RAW")

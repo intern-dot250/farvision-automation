@@ -34,6 +34,17 @@ def test_append_records_coerces_link_ref_code_to_int(monkeypatch):
     assert isinstance(rows[0][0], int)
 
 
+def test_append_records_uses_raw_input_mode(monkeypatch):
+    # RAW (not USER_ENTERED) so Sheets never "smart parses" a comma-grouped
+    # amount string into a number and reintroduces the column's inherited
+    # decimal format - see append_records' docstring.
+    mock_ws = _setup_mocks(monkeypatch)
+    sheets_client.append_records("sheet1", "Sheet1", [
+        {"Link Ref Code": "1", "Narration": "test"}
+    ])
+    assert mock_ws.append_rows.call_args.kwargs["value_input_option"] == "RAW"
+
+
 def test_append_records_keeps_document_date_as_ddmmyyyy_string(monkeypatch):
     mock_ws = _setup_mocks(monkeypatch)
     sheets_client.append_records("sheet1", "Sheet1", [
