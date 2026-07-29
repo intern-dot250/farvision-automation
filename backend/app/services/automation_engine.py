@@ -109,7 +109,7 @@ def _build_receipt_payment_rows(txn: TransactionRowSet, link_ref_code: int) -> d
                 "Parent Account Head": matched.get("Parent Account Head", ""),
                 "Debit Amount": _format_amount(txn.debit),
                 "Credit Amount": _format_amount(txn.credit),
-                "Payment Mode": matched.get("Payment Mode") or "Direct",
+                "Payment Mode": "Net Banking",
                 "Payee Name": txn.classification.payee_name,
             }
         ],
@@ -172,7 +172,7 @@ def _build_deposit_withdrawal_rows(txn: TransactionRowSet, link_ref_code: int) -
                 "Parent Account Head": "Internal Transfer",
                 "Debit Amount": _format_amount(txn.debit),
                 "Credit Amount": _format_amount(txn.credit),
-                "Payment Mode": "Direct",
+                "Payment Mode": "Net Banking",
                 "Payee Name": payee_display,
             }
         ],
