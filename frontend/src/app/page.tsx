@@ -258,6 +258,7 @@ export default function DashboardPage() {
                     <tr>
                       <th className="px-3 py-2 font-medium">SL#</th>
                       <th className="px-3 py-2 font-medium">Payee</th>
+                      <th className="px-3 py-2 font-medium">Source Sheet</th>
                       <th className="px-3 py-2 font-medium">Head</th>
                       <th className="px-3 py-2 font-medium">Destination</th>
                       <th className="px-3 py-2 font-medium">Sheet</th>
@@ -268,6 +269,9 @@ export default function DashboardPage() {
                       <tr key={txn.sl_no}>
                         <td className="px-3 py-2">{txn.sl_no}</td>
                         <td className="px-3 py-2">{txn.payee_name ?? "—"}</td>
+                        <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">
+                          {txn.source_sheet ?? "—"}
+                        </td>
                         <td className="px-3 py-2">{txn.head || "—"}</td>
                         <td className="px-3 py-2">
                           <Badge

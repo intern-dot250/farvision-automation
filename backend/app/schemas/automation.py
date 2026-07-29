@@ -8,6 +8,7 @@ class TransactionSummary(BaseModel):
     head: str
     destination: str
     destination_sheet: str | None = None
+    source_sheet: str | None = None
     payee_name: str | None = None
     needs_review: bool
     review_reason: str | None = None

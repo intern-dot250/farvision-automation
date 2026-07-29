@@ -75,6 +75,7 @@ class TransactionRowSet:
     classification: ClassificationResult
     destination: str  # "deposit_withdrawal" | "receipt_payment" | "review" | "duplicate" | "error"
     destination_sheet: str | None = None  # human-readable sheet name for duplicates
+    source_sheet: str | None = None  # original sheet/tab name from uploaded file
     review_reason: str | None = None
     rows: dict[str, list[dict]] = field(default_factory=dict)
 
@@ -236,6 +237,7 @@ def _process_rows_stream(bank_rows: list[dict], run_id: str, settings):
     for index, row in enumerate(bank_rows):
         sl_no = str(row.get("SL#", ""))
         reference = str(row.get("REFERENCE", "")).strip()
+        source_sheet = str(row.get("source_sheet", "")).strip() or None
 
         try:
             description = row.get("DESCRIPTION", "")
@@ -264,6 +266,7 @@ def _process_rows_stream(bank_rows: list[dict], run_id: str, settings):
                         classification=classification,
                         destination="duplicate",
                         destination_sheet="receipt/payment" if original_dest == "receipt_payment" else "deposit/withdrawal",
+                        source_sheet=source_sheet,
                     )
                 )
             else:
@@ -293,6 +296,7 @@ def _process_rows_stream(bank_rows: list[dict], run_id: str, settings):
                         txn_date=txn_date,
                         classification=classification,
                         destination=destination,
+                        source_sheet=source_sheet,
                     )
                 )
         except Exception as exc:
@@ -315,6 +319,7 @@ def _process_rows_stream(bank_rows: list[dict], run_id: str, settings):
                     ),
                     destination="error",
                     review_reason=str(exc),
+                    source_sheet=source_sheet,
                 )
             )
 

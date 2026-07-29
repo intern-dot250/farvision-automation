@@ -66,6 +66,7 @@ def parse_statement_file(filename: str, content: bytes, sheet_name: str | None =
         if header_row is None:
             raise ValueError(f"Uploaded file is missing required columns: {', '.join(REQUIRED_COLUMNS)}")
         df = _apply_header(raw, header_row)
+        df["source_sheet"] = ""
     else:
         sheets = pd.read_excel(io.BytesIO(content), dtype=str, header=None, sheet_name=None)
 
@@ -77,6 +78,7 @@ def parse_statement_file(filename: str, content: bytes, sheet_name: str | None =
             if header_row is None:
                 raise ValueError(f"Sheet '{resolved_name}' is missing required columns: {', '.join(REQUIRED_COLUMNS)}")
             df = _apply_header(sheets[resolved_name], header_row)
+            df["source_sheet"] = resolved_name
         else:
             matches: dict[str, pd.DataFrame] = {}
             for name, raw in sheets.items():
@@ -96,6 +98,9 @@ def parse_statement_file(filename: str, content: bytes, sheet_name: str | None =
                 # Dashboard, etc.) are filtered out above by header detection.
                 pass
             df = pd.concat(matches.values(), ignore_index=True)
+            df["source_sheet"] = ""
+            for name, matched in matches.items():
+                df.loc[: len(matched) - 1, "source_sheet"] = name
 
     df = df.fillna("")
     records = df.to_dict(orient="records")

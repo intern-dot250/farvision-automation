@@ -219,6 +219,7 @@ def test_duplicate_transaction_is_detected_directly_from_the_sheet():
             "DEBITS": "1000",
             "CREDITS": "",
             "BUSINESS UNIT": "Casa Romana",
+            "source_sheet": "YES Rera 0377",
         }
     ]
 
@@ -240,6 +241,7 @@ def test_duplicate_transaction_is_detected_directly_from_the_sheet():
     txn = transactions[0]
     assert txn.destination == "duplicate"
     assert txn.destination_sheet == "receipt/payment"
+    assert txn.source_sheet == "YES Rera 0377"
     assert txn.classification.head == "Contractor"
     assert txn.classification.payee_name == "Rakiba BIBI"
 
