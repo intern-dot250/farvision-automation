@@ -41,6 +41,23 @@ def _strip_master_suffix(name: str) -> str:
     return _MASTER_SUFFIX_RE.sub("", name).strip()
 
 
+_STANDALONE_PVT_RE = re.compile(r"\bPVT\b")
+
+
+def _canonical(name: str) -> str:
+    """A stricter equality form, checked only after the exact-normalized
+    comparison fails: drops the standalone "PVT" token and removes all
+    whitespace. Deterministic, well-known equivalences - not fuzzy matching:
+
+    - "SN LTD" == "S N LTD" (spacing on initials, e.g. "D K PLYWOOD PVT LTD")
+    - "X LTD" == "X PVT LTD" ("Limited" only maps to "Ltd" by
+      _LEGAL_SUFFIX_REPLACEMENTS, without inserting "Pvt", so a bank
+      narration saying "Prayag Polymers Limited" wouldn't otherwise match
+      Master's "PRAYAG POLYMERS PVT LTD")
+    """
+    return re.sub(r"\s+", "", _STANDALONE_PVT_RE.sub("", name))
+
+
 @lru_cache
 def _load_master_df() -> pd.DataFrame:
     settings = get_settings()
@@ -60,13 +77,21 @@ def find_party(payee_name: str | None) -> dict | None:
 
     df = _load_master_df()
     key = _normalize(payee_name)
+    canonical_key = _canonical(key)
 
     for column in _LOOKUP_COLUMNS:
         if column not in df.columns:
             continue
         normalized = df[column].astype(str).apply(_normalize)
         stripped = normalized.apply(_strip_master_suffix)
-        match = df[(normalized == key) | (stripped == key)]
+        canonical_normalized = normalized.apply(_canonical)
+        canonical_stripped = stripped.apply(_canonical)
+        match = df[
+            (normalized == key)
+            | (stripped == key)
+            | (canonical_normalized == canonical_key)
+            | (canonical_stripped == canonical_key)
+        ]
         if not match.empty:
             return match.iloc[0].to_dict()
 
