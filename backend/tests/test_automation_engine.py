@@ -5,9 +5,34 @@ from app.services.automation_engine import (
     TransactionRowSet,
     _build_deposit_withdrawal_rows,
     _build_receipt_payment_rows,
+    _format_amount,
     _process_rows,
 )
 from app.services.classifier import ClassificationResult
+
+
+def test_format_amount_indian_grouping_under_one_lakh():
+    assert _format_amount(9900) == "9,900"
+
+
+def test_format_amount_indian_grouping_one_lakh():
+    assert _format_amount(150000) == "1,50,000"
+
+
+def test_format_amount_indian_grouping_crore():
+    assert _format_amount(12345678) == "1,23,45,678"
+
+
+def test_format_amount_drops_decimals():
+    assert _format_amount(44840.75) == "44,841"
+
+
+def test_format_amount_zero_is_blank():
+    assert _format_amount(0) == ""
+
+
+def test_format_amount_small_number_no_grouping():
+    assert _format_amount(500) == "500"
 
 
 def _internal_txn(payee_name: str | None) -> TransactionRowSet:

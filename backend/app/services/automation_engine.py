@@ -37,7 +37,27 @@ def _parse_txn_date(value: str) -> datetime:
 
 
 def _format_amount(amount: float) -> str:
-    return f"{amount:,.2f}" if amount else ""
+    """Indian digit grouping (lakh/crore), whole rupees only - e.g.
+    150000 -> "1,50,000", not the Western "150,000.00"."""
+    if not amount:
+        return ""
+
+    sign = "-" if amount < 0 else ""
+    digits = str(int(round(abs(amount))))
+
+    if len(digits) <= 3:
+        return f"{sign}{digits}"
+
+    last_three = digits[-3:]
+    rest = digits[:-3]
+    groups = []
+    while len(rest) > 2:
+        groups.insert(0, rest[-2:])
+        rest = rest[:-2]
+    if rest:
+        groups.insert(0, rest)
+
+    return f"{sign}{','.join(groups)},{last_three}"
 
 
 def _financial_year(date: datetime) -> str:
