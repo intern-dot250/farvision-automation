@@ -22,6 +22,7 @@ def _build_run_response(result: automation_engine.RunResult) -> RunResponse:
         transactions=[
             TransactionSummary(
                 sl_no=txn.sl_no,
+                date=txn.txn_date.strftime("%d/%m/%Y"),
                 reference=txn.reference,
                 description=txn.description,
                 head=txn.classification.head,

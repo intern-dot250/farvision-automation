@@ -257,17 +257,22 @@ export default function DashboardPage() {
                   <thead className="bg-zinc-50 text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400">
                     <tr>
                       <th className="px-3 py-2 font-medium">SL#</th>
+                      <th className="px-3 py-2 font-medium">Date</th>
                       <th className="px-3 py-2 font-medium">Payee</th>
                       <th className="px-3 py-2 font-medium">Source Sheet</th>
                       <th className="px-3 py-2 font-medium">Head</th>
                       <th className="px-3 py-2 font-medium">Destination</th>
                       <th className="px-3 py-2 font-medium">Sheet</th>
+                      <th className="px-3 py-2 font-medium">Description</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
                     {result.transactions.map((txn) => (
                       <tr key={txn.sl_no}>
                         <td className="px-3 py-2">{txn.sl_no}</td>
+                        <td className="px-3 py-2 whitespace-nowrap text-zinc-600 dark:text-zinc-400">
+                          {txn.date}
+                        </td>
                         <td className="px-3 py-2">{txn.payee_name ?? "—"}</td>
                         <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">
                           {txn.source_sheet ?? "—"}
@@ -295,6 +300,12 @@ export default function DashboardPage() {
                               : txn.destination === "deposit_withdrawal"
                                 ? "Deposit / Withdrawal"
                                 : "—"}
+                        </td>
+                        <td
+                          className="max-w-xs truncate px-3 py-2 text-zinc-600 dark:text-zinc-400"
+                          title={txn.description}
+                        >
+                          {txn.description}
                         </td>
                       </tr>
                     ))}

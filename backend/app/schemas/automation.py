@@ -3,6 +3,7 @@ from pydantic import BaseModel
 
 class TransactionSummary(BaseModel):
     sl_no: str
+    date: str
     reference: str
     description: str
     head: str

@@ -2,6 +2,7 @@ import { API_BASE_URL, apiFetch, ApiError } from "@/lib/api-client";
 
 export type TransactionSummary = {
   sl_no: string;
+  date: string;
   reference: string;
   description: string;
   head: string;
