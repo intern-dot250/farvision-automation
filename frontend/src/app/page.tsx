@@ -52,8 +52,8 @@ export default function DashboardPage() {
     setFile(selected);
     setResult(null);
     setRunError(null);
-    setSheetName("");
     setSheetOptions([]);
+    setSheetName("");
 
     if (!selected || !/\.xlsx?$/i.test(selected.name)) {
       return;
@@ -167,7 +167,9 @@ export default function DashboardPage() {
           {!sheetOptionsLoading && sheetOptions.length > 1 && (
             <label className="flex flex-col gap-1">
               <span className="text-sm text-zinc-600 dark:text-zinc-400">
-                This file has transaction data on multiple sheets - choose which one to use
+                {sheetName
+                  ? `Using sheet: ${sheetName}`
+                  : `${sheetOptions.length} sheets found — processing all together`}
               </span>
               <select
                 value={sheetName}
@@ -175,7 +177,7 @@ export default function DashboardPage() {
                 disabled={running}
                 className="w-fit rounded-md border border-zinc-300 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900"
               >
-                <option value="">Select a sheet…</option>
+                <option value="">All sheets</option>
                 {sheetOptions.map((name) => (
                   <option key={name} value={name}>
                     {name}
@@ -197,7 +199,7 @@ export default function DashboardPage() {
 
           <button
             onClick={handleRun}
-            disabled={running || !file || (sheetOptions.length > 1 && !sheetName)}
+            disabled={running || !file}
             className="w-fit rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
           >
             {running
@@ -228,23 +230,7 @@ export default function DashboardPage() {
           )}
 
           {runError && (
-            <div className="flex flex-col gap-2">
-              <p className="text-sm text-red-600 dark:text-red-400">{runError}</p>
-              {runError.includes("multiple sheets") && (
-                <label className="flex flex-col gap-1">
-                  <span className="text-sm text-zinc-600 dark:text-zinc-400">
-                    Sheet/tab name to use
-                  </span>
-                  <input
-                    type="text"
-                    value={sheetName}
-                    onChange={(e) => setSheetName(e.target.value)}
-                    placeholder="e.g. YES IDW 0490"
-                    className="w-fit rounded-md border border-zinc-300 px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
-                  />
-                </label>
-              )}
-            </div>
+            <p className="text-sm text-red-600 dark:text-red-400">{runError}</p>
           )}
 
           {result && (

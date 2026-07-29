@@ -90,11 +90,12 @@ def parse_statement_file(filename: str, content: bytes, sheet_name: str | None =
                     f"Checked {len(sheets)} sheet(s), none had a matching header row."
                 )
             if len(matches) > 1:
-                raise ValueError(
-                    f"Uploaded file has transaction data on multiple sheets ({', '.join(matches.keys())}). "
-                    "Re-upload specifying which sheet to use."
-                )
-            df = next(iter(matches.values()))
+                # Workbook has several bank-account tabs; the user uploaded
+                # without picking one, so process all of them together rather
+                # than rejecting the upload. Non-transaction tabs (Index,
+                # Dashboard, etc.) are filtered out above by header detection.
+                pass
+            df = pd.concat(matches.values(), ignore_index=True)
 
     df = df.fillna("")
     records = df.to_dict(orient="records")

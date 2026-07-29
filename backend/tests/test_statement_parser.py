@@ -121,7 +121,67 @@ def test_list_candidate_sheets_returns_only_matching_tabs():
     assert result == ["YES Rera 0377"]
 
 
+def test_multiple_sheets_with_data_are_concatenated():
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer) as writer:
+        pd.DataFrame([
+            {
+                "SL#": "1",
+                "TXN DATE": "22-Jul-2026",
+                "DESCRIPTION": "YIB-NEFT-REF1-Payee1-SBIN0007204-Contractor-STATE BANK OF INDIA",
+                "REFERENCE": "REF1",
+                "DEBITS": "1000",
+                "CREDITS": "",
+            }
+        ]).to_excel(writer, sheet_name="YES Rera 0377", index=False)
+        pd.DataFrame([
+            {
+                "SL#": "1",
+                "TXN DATE": "22-Jul-2026",
+                "DESCRIPTION": "YIB-NEFT-REF2-Payee2-SBIN0007204-Contractor-STATE BANK OF INDIA",
+                "REFERENCE": "REF2",
+                "DEBITS": "500",
+                "CREDITS": "",
+            }
+        ]).to_excel(writer, sheet_name="YES IDW 0490", index=False)
+
+    rows = parse_statement_file("multi.xlsx", buffer.getvalue())
+
+    assert len(rows) == 2
+    assert rows[0]["REFERENCE"] == "REF1"
+    assert rows[1]["REFERENCE"] == "REF2"
+
+
+def test_multiple_sheets_non_txn_sheets_are_ignored():
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer) as writer:
+        pd.DataFrame([
+            {
+                "SL#": "1",
+                "TXN DATE": "22-Jul-2026",
+                "DESCRIPTION": "YIB-NEFT-REF1-Payee1-SBIN0007204-Contractor-STATE BANK OF INDIA",
+                "REFERENCE": "REF1",
+                "DEBITS": "1000",
+                "CREDITS": "",
+            }
+        ]).to_excel(writer, sheet_name="YES Rera 0377", index=False)
+        pd.DataFrame([{"unrelated": "no transaction columns here"}]).to_excel(
+            writer, sheet_name="Index", index=False
+        )
+        pd.DataFrame([{"Summary": "totals"}]).to_excel(
+            writer, sheet_name="Dashboard", index=False
+        )
+
+    rows = parse_statement_file("multi.xlsx", buffer.getvalue())
+
+    assert len(rows) == 1
+    assert rows[0]["REFERENCE"] == "REF1"
+
+
 def test_list_candidate_sheets_empty_for_csv():
+    result = list_candidate_sheets("statement.csv", b"a,b\n1,2\n")
+
+    assert result == []
     result = list_candidate_sheets("statement.csv", b"a,b\n1,2\n")
 
     assert result == []
