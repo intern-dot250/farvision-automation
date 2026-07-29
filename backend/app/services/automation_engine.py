@@ -107,7 +107,7 @@ def _build_receipt_payment_rows(txn: TransactionRowSet, link_ref_code: int) -> d
                 "Document Date": doc_date,
                 "Document No": "",
                 "Narration": txn.description,
-                "BankName": BANK_NAME_FOR_STATEMENT,
+                "BankName": matched.get("Bank Name", ""),
                 "EntryTypes": "RECEIPT / PAYMENT",
                 "Reference": txn.reference,
             }

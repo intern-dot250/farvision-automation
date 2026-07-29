@@ -92,6 +92,20 @@ def test_vendor_head_gets_single_gst_import_tax_info_row():
     assert tax_rows[0]["Description"] == "Nil Rated-Service"
 
 
+def test_receipt_payment_bank_name_comes_from_master_not_hardcoded():
+    txn = _receipt_payment_txn("Contractor", {"Bank Name": "PNB CURRENT A/C - (4184002100014005)"})
+    rows = _build_receipt_payment_rows(txn, link_ref_code=2)
+
+    assert rows["ReceiptPayment"][0]["BankName"] == "PNB CURRENT A/C - (4184002100014005)"
+
+
+def test_receipt_payment_bank_name_blank_when_master_has_none():
+    txn = _receipt_payment_txn("Contractor", {})
+    rows = _build_receipt_payment_rows(txn, link_ref_code=2)
+
+    assert rows["ReceiptPayment"][0]["BankName"] == ""
+
+
 def test_other_head_keeps_original_master_driven_single_row():
     txn = _receipt_payment_txn(
         "SUNDRY CREDITORS - OTHER",
