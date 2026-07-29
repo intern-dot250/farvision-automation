@@ -75,6 +75,40 @@ def test_fully_blank_rows_are_dropped():
     assert [r["SL#"] for r in rows] == ["1", "2"]
 
 
+def test_fully_blank_rows_are_dropped_even_with_source_sheet_tagged():
+    # Regression: source_sheet is set on every row (including blank ones)
+    # before the blank-row filter runs, so the filter must ignore it -
+    # otherwise every row looks "non-blank" and nothing gets dropped.
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer) as writer:
+        pd.DataFrame(
+            [
+                {
+                    "SL#": "1",
+                    "TXN DATE": "22-Jul-2026",
+                    "DESCRIPTION": "YIB-NEFT-REF1-Payee1-SBIN0007204-Contractor-STATE BANK OF INDIA",
+                    "REFERENCE": "REF1",
+                    "DEBITS": "1000",
+                    "CREDITS": "",
+                },
+                {
+                    "SL#": "",
+                    "TXN DATE": "",
+                    "DESCRIPTION": "",
+                    "REFERENCE": "",
+                    "DEBITS": "",
+                    "CREDITS": "",
+                },
+            ]
+        ).to_excel(writer, sheet_name="YES AH IDW 2457", index=False)
+
+    rows = parse_statement_file("statement.xlsx", buffer.getvalue())
+
+    assert len(rows) == 1
+    assert rows[0]["REFERENCE"] == "REF1"
+    assert rows[0]["source_sheet"] == "YES AH IDW 2457"
+
+
 def _two_sheet_workbook() -> bytes:
     df = pd.DataFrame(
         [

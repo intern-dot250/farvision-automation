@@ -106,5 +106,11 @@ def parse_statement_file(filename: str, content: bytes, sheet_name: str | None =
     records = df.to_dict(orient="records")
     # Accounts intentionally leaves fully blank rows in the source workbook
     # (spacers between sections) - drop them rather than trying to classify
-    # them as failed transactions.
-    return [record for record in records if any(str(value).strip() for value in record.values())]
+    # them as failed transactions. "source_sheet" is synthetic metadata we
+    # add above, always non-blank, so it's excluded here - otherwise every
+    # row would look "non-blank" and this filter would never catch anything.
+    return [
+        record
+        for record in records
+        if any(str(value).strip() for key, value in record.items() if key != "source_sheet")
+    ]
