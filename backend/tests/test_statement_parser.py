@@ -61,6 +61,20 @@ def test_blank_cells_become_empty_strings():
     assert rows[0]["HEAD"] == ""
 
 
+def test_fully_blank_rows_are_dropped():
+    csv_content = (
+        "SL#,TXN DATE,DESCRIPTION,REFERENCE,DEBITS,CREDITS\n"
+        "1,22-Jul-2026,YIB-NEFT-REF1-Some Payee-SBIN0007204-Contractor-STATE BANK OF INDIA,REF1,1000,\n"
+        ",,,,,\n"
+        "2,23-Jul-2026,YIB-NEFT-REF2-Other Payee-SBIN0007204-Contractor-STATE BANK OF INDIA,REF2,500,\n"
+    ).encode()
+
+    rows = parse_statement_file("statement.csv", csv_content)
+
+    assert len(rows) == 2
+    assert [r["SL#"] for r in rows] == ["1", "2"]
+
+
 def _two_sheet_workbook() -> bytes:
     df = pd.DataFrame(
         [

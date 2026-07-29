@@ -97,7 +97,10 @@ def test_existing_head_internal_still_looks_up_master_for_bank_name():
     assert result.payee_name == "DWARKADHIS PROJECTS PRIVATE LIMITED IN CIRP CR"
 
 
-def test_existing_head_with_no_master_match_still_flagged_for_review():
+def test_existing_head_with_no_master_match_still_routes_without_review():
+    # A trusted, non-Internal head from the statement (Contractor/Vendor/...)
+    # is enough on its own to route to Receipt/Payment - it shouldn't need
+    # review just because Master doesn't happen to have this payee.
     with patch("app.services.classifier.master_repository.find_party") as mock_find:
         mock_find.return_value = None
 
@@ -108,5 +111,5 @@ def test_existing_head_with_no_master_match_still_flagged_for_review():
 
     assert result.is_internal is False
     assert result.head == "Vendor"
-    assert result.needs_review is True
-    assert "Unknown Payee" in result.review_reason
+    assert result.needs_review is False
+    assert result.matched_master_row is None

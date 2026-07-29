@@ -97,4 +97,8 @@ def parse_statement_file(filename: str, content: bytes, sheet_name: str | None =
             df = next(iter(matches.values()))
 
     df = df.fillna("")
-    return df.to_dict(orient="records")
+    records = df.to_dict(orient="records")
+    # Accounts intentionally leaves fully blank rows in the source workbook
+    # (spacers between sections) - drop them rather than trying to classify
+    # them as failed transactions.
+    return [record for record in records if any(str(value).strip() for value in record.values())]

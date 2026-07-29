@@ -57,6 +57,10 @@ def classify_transaction(description: str, existing_head: str | None = None) -> 
                 bank_name=parsed.bank_name,
             )
 
+        # A trusted, non-Internal head from the statement (Contractor/Vendor/
+        # etc.) is enough on its own to route to Receipt/Payment - a Master
+        # match is only used to fill in extra fields (Account Head, Bank
+        # Name, ...) when available, not required for routing.
         matched = master_repository.find_party(parsed.payee_name)
 
         return ClassificationResult(
@@ -64,10 +68,7 @@ def classify_transaction(description: str, existing_head: str | None = None) -> 
             head=trusted_head,
             payee_name=parsed.payee_name,
             matched_master_row=matched,
-            needs_review=matched is None,
-            review_reason=(
-                None if matched else f"No Master match for payee '{parsed.payee_name}' (given head: {trusted_head})"
-            ),
+            needs_review=False,
             bank_name=parsed.bank_name,
         )
 
