@@ -124,6 +124,23 @@ def _receipt_payment_txn(head: str, matched_master_row: dict | None) -> Transact
     )
 
 
+def test_ledger_details_parent_account_head_falls_back_to_trusted_head():
+    # An unmatched Vendor/Contractor payee must still pass LedgerDetails'
+    # required-field validation (Parent Account Head) so _assign_rows doesn't
+    # wrongly reroute it to "review" just because Master has no entry for it.
+    txn = _receipt_payment_txn("Vendor", {})
+    rows = _build_receipt_payment_rows(txn, link_ref_code=4)
+
+    assert rows["LedgerDetails"][0]["Parent Account Head"] == "Vendor"
+
+
+def test_ledger_details_parent_account_head_prefers_master_when_present():
+    txn = _receipt_payment_txn("Contractor", {"Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS"})
+    rows = _build_receipt_payment_rows(txn, link_ref_code=4)
+
+    assert rows["LedgerDetails"][0]["Parent Account Head"] == "SUNDRY CREDITORS - CONTRACTORS"
+
+
 def test_contractor_head_gets_two_import_tax_info_rows():
     txn = _receipt_payment_txn("Contractor", {"Description": "TDS ON CONTRACTORS"})
     rows = _build_receipt_payment_rows(txn, link_ref_code=7)
