@@ -133,3 +133,71 @@ def test_get_column_values_missing_column_returns_empty_set(monkeypatch):
     result = sheets_client.get_column_values("sheet1", "Sheet1", "Link Ref Code")
 
     assert result == set()
+
+
+class _FakeSettings:
+    RECEIPT_PAYMENT_SHEET_ID = "rp-sheet-id"
+    DEPOSIT_WITHDRAWAL_SHEET_ID = "dw-sheet-id"
+
+
+def _mock_ws_with_empty_header():
+    mock_ws = MagicMock()
+    mock_ws.row_values.return_value = []
+    return mock_ws
+
+
+def test_append_records_restores_missing_header_for_receipt_payment_ledger_details(monkeypatch):
+    monkeypatch.setattr(sheets_client, "get_settings", lambda: _FakeSettings())
+    mock_ws = _mock_ws_with_empty_header()
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    sheets_client.append_records(
+        "rp-sheet-id", "LedgerDetails", [{"Link Ref Code": "1", "Account Head": "RAKIBA BIBI"}]
+    )
+
+    mock_ws.update.assert_called_once()
+    _, kwargs = mock_ws.update.call_args
+    written_header = kwargs["values"][0]
+    assert written_header == sheets_client._RECEIPT_PAYMENT_HEADERS["LedgerDetails"]
+    assert len(written_header) == 31
+    mock_ws.append_rows.assert_called_once()
+
+
+def test_append_records_restores_missing_header_for_deposit_withdrawal_ledger_details(monkeypatch):
+    monkeypatch.setattr(sheets_client, "get_settings", lambda: _FakeSettings())
+    mock_ws = _mock_ws_with_empty_header()
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    sheets_client.append_records(
+        "dw-sheet-id", "LedgerDetails", [{"Link Ref Code": "1", "Account Head": "Internal Transfer"}]
+    )
+
+    mock_ws.update.assert_called_once()
+    _, kwargs = mock_ws.update.call_args
+    written_header = kwargs["values"][0]
+    assert written_header == sheets_client._DEPOSIT_WITHDRAWAL_HEADERS["LedgerDetails"]
+    assert len(written_header) == 14
+    mock_ws.append_rows.assert_called_once()
+
+
+def test_append_records_does_not_touch_header_when_already_present(monkeypatch):
+    monkeypatch.setattr(sheets_client, "get_settings", lambda: _FakeSettings())
+    mock_ws = _make_mock_ws()
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    sheets_client.append_records("rp-sheet-id", "LedgerDetails", [{"Link Ref Code": "1", "Narration": "test"}])
+
+    mock_ws.update.assert_not_called()
+
+
+def test_append_records_raises_for_unknown_sheet_with_missing_header(monkeypatch):
+    monkeypatch.setattr(sheets_client, "get_settings", lambda: _FakeSettings())
+    mock_ws = _mock_ws_with_empty_header()
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    try:
+        sheets_client.append_records("some-other-sheet-id", "MysteryTab", [{"Link Ref Code": "1"}])
+        assert False, "expected ValueError"
+    except ValueError as exc:
+        assert "MysteryTab" in str(exc)
+    mock_ws.append_rows.assert_not_called()

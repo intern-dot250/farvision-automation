@@ -14,6 +14,56 @@ SCOPES = [
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
+# Canonical header rows for every tab the app writes to, keyed by which
+# spreadsheet the tab lives in - both spreadsheets have a "LedgerDetails" tab
+# but with different columns, so tab name alone isn't a safe key. Used to
+# self-heal a tab whose header row was accidentally wiped (e.g. someone
+# deleted all rows including row 1) before the app writes to it again.
+_RECEIPT_PAYMENT_HEADERS: dict[str, list[str]] = {
+    "ReceiptPayment": [
+        "Link Ref Code", "Business Unit", "Financial Year", "Document Type",
+        "Document Date", "Document No", "Narration", "BankName", "EntryTypes", "Reference",
+    ],
+    "ReceiptPaymentDetail": ["Link Ref Code", "Detail Link Ref Code"],
+    "LedgerDetails": [
+        "Link Ref Code", "Detail Link Ref Code", "Business Unit", "Document Type",
+        "Debit/Credit", "Account Head", "Parent Account Head", "Debit Amount",
+        "Credit Amount", "Narration", "Payment Mode", "Cheque No", "Cheque Date",
+        "Cheque Type", "Payee Name", "Beneficiary", "Card Type", "Print Cheque",
+        "Sub Project", "Budget", "Zone", "Department", "Order", "Milestone",
+        "Tower", "Segment", "Employee", "Employee Name", "Department Name",
+        "Cost Center", "Purpose Of Payment",
+    ],
+    "AdjustmentDetails": [
+        "Link Ref Code", "Detail Link Ref Code", "Docno", "Date", "Invoice No",
+        "Invoice Date", "Bill Amount", "Balance Amount", "Adjustment Amount",
+    ],
+    "ImportTaxInfo": ["Link Ref Code", "Detail Link Ref Code", "Deduction Type", "Description"],
+}
+
+_DEPOSIT_WITHDRAWAL_HEADERS: dict[str, list[str]] = {
+    "DepositWithdrawal": [
+        "Link Ref Code", "DepositWithdrawal Business Unit", "DepositWithdrawal Narration",
+        "Financial Year", "Document Type", "Document Date", "Document No",
+        "BankName", "EntryTypes", "Reference",
+    ],
+    "DepositWithdrawalDetails": ["Link Ref Code"],
+    "LedgerDetails": [
+        "Link Ref Code", "Debit/Credit", "Account Head", "Parent Account Head",
+        "Debit Amount", "Credit Amount", "Payment Mode", "Cheque No", "Cheque Date",
+        "Cheque Type", "Payee Name", "Card Type", "Narration", "Print Cheque",
+    ],
+}
+
+
+def _canonical_header(sheet_id: str, worksheet_name: str) -> list[str] | None:
+    settings = get_settings()
+    if sheet_id == settings.RECEIPT_PAYMENT_SHEET_ID:
+        return _RECEIPT_PAYMENT_HEADERS.get(worksheet_name)
+    if sheet_id == settings.DEPOSIT_WITHDRAWAL_SHEET_ID:
+        return _DEPOSIT_WITHDRAWAL_HEADERS.get(worksheet_name)
+    return None
+
 
 def _resolve_credentials_path() -> Path:
     settings = get_settings()
@@ -127,6 +177,14 @@ def append_records(sheet_id: str, worksheet_name: str, records: list[dict]) -> N
 
     worksheet = get_worksheet(sheet_id, worksheet_name)
     header = worksheet.row_values(1)
+    if not header:
+        header = _canonical_header(sheet_id, worksheet_name)
+        if not header:
+            raise ValueError(
+                f"'{worksheet_name}' has no header row and no canonical header is known for it"
+            )
+        worksheet.update(range_name="A1", values=[header])
+
     rows = [
         [_coerce(record.get(column, ""), column) for column in header]
         for record in records
