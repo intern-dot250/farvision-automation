@@ -34,23 +34,32 @@ def test_append_records_coerces_link_ref_code_to_int(monkeypatch):
     assert isinstance(rows[0][0], int)
 
 
-def test_append_records_coerces_document_date_to_iso_string(monkeypatch):
+def test_append_records_keeps_document_date_as_ddmmyyyy_string(monkeypatch):
     mock_ws = _setup_mocks(monkeypatch)
     sheets_client.append_records("sheet1", "Sheet1", [
         {"Link Ref Code": "1", "Document Date": "22/07/2026", "Narration": "test"}
     ])
     rows = mock_ws.append_rows.call_args.args[0]
-    assert rows[0][1] == "2026-07-22"
+    assert rows[0][1] == "22/07/2026"
     assert isinstance(rows[0][1], str)
 
 
-def test_append_records_coerces_invoice_date_to_iso_string(monkeypatch):
+def test_append_records_keeps_invoice_date_as_ddmmyyyy_string(monkeypatch):
     mock_ws = _setup_mocks(monkeypatch)
     sheets_client.append_records("sheet1", "Sheet1", [
         {"Link Ref Code": "1", "Invoice Date": "06/07/2026", "Narration": "test"}
     ])
     rows = mock_ws.append_rows.call_args.args[0]
-    assert rows[0][2] == "2026-07-06"
+    assert rows[0][2] == "06/07/2026"
+
+
+def test_append_records_document_date_and_invoice_date_stay_in_same_format(monkeypatch):
+    mock_ws = _setup_mocks(monkeypatch)
+    sheets_client.append_records("sheet1", "Sheet1", [
+        {"Link Ref Code": "1", "Document Date": "01/05/2026", "Invoice Date": "01/05/2026", "Narration": "test"}
+    ])
+    rows = mock_ws.append_rows.call_args.args[0]
+    assert rows[0][1] == rows[0][2] == "01/05/2026"
 
 
 def test_append_records_output_is_json_serializable(monkeypatch):
