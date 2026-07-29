@@ -1,7 +1,83 @@
 import pandas as pd
 
 from app.services import master_repository
-from app.services.master_repository import _canonical, _normalize, _strip_master_suffix
+from app.services.master_repository import (
+    _canonical,
+    _digits_only,
+    _last_n_digits,
+    _normalize,
+    _strip_master_suffix,
+    find_bank_by_account_suffix,
+)
+
+
+def test_digits_only_strips_non_digits():
+    assert _digits_only("YES BANK AH IDW 045563400002457") == "045563400002457"
+    assert _digits_only("") == ""
+
+
+def test_last_n_digits_returns_trailing_n():
+    assert _last_n_digits("YES BANK AH IDW 045563400002457", 4) == "2457"
+    assert _last_n_digits("045563400002457", 4) == "2457"
+    assert _last_n_digits("2457", 4) == "2457"
+
+
+def test_last_n_digits_returns_none_when_fewer_than_n_digits():
+    assert _last_n_digits("", 4) is None
+    assert _last_n_digits("abc", 4) is None
+    assert _last_n_digits("123", 4) is None
+
+
+def test_last_n_digits_ignores_non_digit_chars():
+    assert _last_n_digits("IDW - 2457 (active)", 4) == "2457"
+
+
+def test_find_bank_by_account_suffix_matches_last_4_digits(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [
+            {"Payee Name": "YES BANK AH IDW", "Account Head": "Contractor", "Bank Name": "YES BANK AH IDW 045563400002457"},
+            {"Payee Name": "ICICI BANK LTD", "Account Head": "Vendor", "Bank Name": "ICICI BANK LTD 000123456789"},
+        ]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    assert find_bank_by_account_suffix("2457") == "YES BANK AH IDW 045563400002457"
+    assert find_bank_by_account_suffix("6789") == "ICICI BANK LTD 000123456789"
+
+
+def test_find_bank_by_account_suffix_no_match_returns_none(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [
+            {"Payee Name": "YES BANK AH IDW", "Account Head": "Contractor", "Bank Name": "YES BANK AH IDW 045563400002457"},
+        ]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    assert find_bank_by_account_suffix("9999") is None
+
+
+def test_find_bank_by_account_suffix_handles_short_accounts(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [
+            {"Payee Name": "MINI", "Account Head": "Contractor", "Bank Name": "MINI 123"},
+        ]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    # "123" has fewer than 4 digits — skipped, no match
+    assert find_bank_by_account_suffix("123") is None
+    assert find_bank_by_account_suffix("") is None
+
+
+def test_find_bank_by_account_suffix_empty_bank_name_column(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [
+            {"Payee Name": "YES BANK AH IDW", "Account Head": "Contractor"},
+        ]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    assert find_bank_by_account_suffix("2457") is None
 
 
 def test_strips_paren_code_suffix():

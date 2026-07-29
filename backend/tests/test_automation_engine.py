@@ -1,3 +1,4 @@
+import pandas as pd
 from datetime import datetime
 from unittest.mock import patch
 
@@ -274,7 +275,13 @@ def test_non_duplicate_transaction_when_reference_absent_from_both_sheets():
     assert transactions[0].source_sheet == "YES AH IDW 2457"
 
 
-def test_receipt_payment_bank_name_uses_source_sheet_when_present():
+def test_receipt_payment_bank_name_uses_source_sheet_when_present(monkeypatch):
+    # _resolve_own_bank_name calls find_bank_by_account_suffix → _load_master_df →
+    # live Google Sheets. Stub the loader so the test stays offline.
+    from app.services import master_repository
+
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: pd.DataFrame(columns=["Bank Name"]))
+
     txn = _receipt_payment_txn("Contractor", {"Bank Name": "PNB CURRENT A/C -"})
     txn.source_sheet = "YES AH IDW 2457"
     rows = _build_receipt_payment_rows(txn, link_ref_code=2)
@@ -283,7 +290,11 @@ def test_receipt_payment_bank_name_uses_source_sheet_when_present():
     assert rows["ReceiptPayment"][0]["BankName"] == "YES AH IDW 2457"
 
 
-def test_deposit_withdrawal_bank_name_uses_source_sheet_when_present():
+def test_deposit_withdrawal_bank_name_uses_source_sheet_when_present(monkeypatch):
+    from app.services import master_repository
+
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: pd.DataFrame(columns=["Bank Name"]))
+
     txn = _internal_txn(
         "DWARKADHIS PROJECTS PRIVATE LIMITED",
         matched_master_row={"Bank Name": "UBI ESCROW A/C CR- 497801010000168"},
@@ -293,3 +304,54 @@ def test_deposit_withdrawal_bank_name_uses_source_sheet_when_present():
     rows = _build_deposit_withdrawal_rows(txn, link_ref_code=1)
 
     assert rows["DepositWithdrawal"][0]["BankName"] == "YES Rera 0377"
+
+
+def test_receipt_payment_bank_name_resolves_full_form_from_master_by_suffix(monkeypatch):
+    from app.services import master_repository
+
+    df = pd.DataFrame.from_records(
+        [{"Bank Name": "YES BANK AH IDW 045563400002457"}]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    txn = _receipt_payment_txn("Contractor", {"Bank Name": "PNB CURRENT A/C -"})
+    txn.source_sheet = "YES AH IDW 2457"
+    rows = _build_receipt_payment_rows(txn, link_ref_code=2)
+
+    # Source sheet's "2457" suffix matches Master's full-form entry.
+    assert rows["ReceiptPayment"][0]["BankName"] == "YES BANK AH IDW 045563400002457"
+
+
+def test_receipt_payment_bank_name_falls_back_to_source_sheet_when_no_master_suffix_match(monkeypatch):
+    from app.services import master_repository
+
+    df = pd.DataFrame.from_records(
+        [{"Bank Name": "SOME OTHER BANK 99998888"}]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    txn = _receipt_payment_txn("Contractor", {"Bank Name": "PNB CURRENT A/C -"})
+    txn.source_sheet = "YES AH IDW 2457"
+    rows = _build_receipt_payment_rows(txn, link_ref_code=2)
+
+    # No suffix match — keep the source sheet as-is.
+    assert rows["ReceiptPayment"][0]["BankName"] == "YES AH IDW 2457"
+
+
+def test_deposit_withdrawal_bank_name_resolves_full_form_from_master_by_suffix(monkeypatch):
+    from app.services import master_repository
+
+    df = pd.DataFrame.from_records(
+        [{"Bank Name": "YES BANK RERA 045563200000377"}]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    txn = _internal_txn(
+        "DWARKADHIS PROJECTS PRIVATE LIMITED",
+        matched_master_row={"Bank Name": "UBI ESCROW A/C CR- 497801010000168"},
+        bank_name="SOME NARRATION BANK",
+    )
+    txn.source_sheet = "YES Rera 0377"
+    rows = _build_deposit_withdrawal_rows(txn, link_ref_code=1)
+
+    assert rows["DepositWithdrawal"][0]["BankName"] == "YES BANK RERA 045563200000377"

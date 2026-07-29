@@ -4,7 +4,7 @@ from datetime import datetime
 
 from app.core.config import get_settings
 from app.core.logger import logger
-from app.services import classifier, ledger_repository, ref_code, sheets_client, validation
+from app.services import classifier, ledger_repository, master_repository, ref_code, sheets_client, validation
 from app.services.classifier import ClassificationResult
 
 BANK_STATEMENT_WORKSHEET = "YES IDW 0490"
@@ -55,6 +55,24 @@ def _format_amount(amount: float) -> str:
         groups.insert(0, rest)
 
     return f"{sign}{','.join(groups)},{last_three}"
+
+
+def _resolve_own_bank_name(source_sheet, matched_master, narration_bank) -> str:
+    """Resolve the BankName value for a Receipt/Payment or Deposit/
+    Withdrawal row. When the transaction came from a multi-tab workbook
+    upload, the source tab name encodes our own bank account in short
+    form (e.g. "YES AH IDW 2457"). Master carries the full form (e.g.
+    "YES BANK AH IDW 045563400002457") — match on the last 4 digits of
+    the embedded account number and prefer the full form. Fall back to
+    Master's Bank Name, then narration-parsed bank, then blank."""
+    if source_sheet:
+        suffix = master_repository._last_n_digits(source_sheet, 4)
+        if suffix:
+            full = master_repository.find_bank_by_account_suffix(suffix)
+            if full:
+                return full
+        return source_sheet
+    return matched_master.get("Bank Name") or narration_bank or ""
 
 
 def _financial_year(date: datetime) -> str:
@@ -116,15 +134,14 @@ def _build_receipt_payment_rows(txn: TransactionRowSet, link_ref_code: int) -> d
     financial_year = _financial_year(txn.txn_date)
     # The BankName column identifies our own bank account for the
     # transaction. When the upload came from a multi-tab workbook, the
-    # source tab name (e.g. "YES AH IDW 2457") IS the bank account, so
-    # prefer it; otherwise fall back to the Master lookup, then the
-    # counterparty bank parsed from the narration (used when running
-    # from the configured Google Sheet, where there is no source tab).
-    bank_name = (
-        txn.source_sheet
-        or matched.get("Bank Name")
-        or txn.classification.bank_name
-        or ""
+    # source tab name (e.g. "YES AH IDW 2457") maps to a full-form Master
+    # entry (e.g. "YES BANK AH IDW 045563400002457") via the last 4 digits
+    # of the embedded account number. Otherwise fall back to Master's
+    # Bank Name on the matched payee row, then the counterparty bank parsed
+    # from the narration (used when running from the configured Google
+    # Sheet, where there is no source tab).
+    bank_name = _resolve_own_bank_name(
+        txn.source_sheet, matched, txn.classification.bank_name
     )
 
     return {
@@ -189,14 +206,9 @@ def _build_deposit_withdrawal_rows(txn: TransactionRowSet, link_ref_code: int) -
     # the generic label (e.g. non-TPT internal formats with no extractable
     # name).
     payee_display = txn.classification.payee_name or "Internal Transfer"
-    # The BankName column identifies our own bank account. The source tab
-    # name IS the bank account when uploading from a multi-tab workbook,
-    # so prefer it; otherwise fall back to Master / narration lookup.
-    bank_name = (
-        txn.source_sheet
-        or matched.get("Bank Name")
-        or txn.classification.bank_name
-        or ""
+    # Same BankName resolution as Receipt/Payment — see _build_rp_rows.
+    bank_name = _resolve_own_bank_name(
+        txn.source_sheet, matched, txn.classification.bank_name
     )
 
     return {

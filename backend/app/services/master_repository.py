@@ -58,6 +58,46 @@ def _canonical(name: str) -> str:
     return re.sub(r"\s+", "", _STANDALONE_PVT_RE.sub("", name))
 
 
+def _digits_only(value: str) -> str:
+    """Strip every non-digit character from a string."""
+    return re.sub(r"\D", "", value)
+
+
+def _last_n_digits(value: str, n: int) -> str | None:
+    """Return the last `n` digits in a string, or None if fewer than `n`
+    digits are present. Non-digit characters are ignored."""
+    digits = _digits_only(value)
+    if len(digits) >= n:
+        return digits[-n:]
+    return None
+
+
+def find_bank_by_account_suffix(suffix: str) -> str | None:
+    """Find a Master row whose "Bank Name" contains an account number whose
+    last N digits match `suffix`. Returns the full "Bank Name" value from
+    Master, or None if no row matches.
+
+    This resolves short-form source-tab names like "YES AH IDW 2457" to
+    the full-form Master value "YES BANK AH IDW 045563400002457" by
+    matching on the last-4-digit account-number suffix. Deterministic
+    digit-only comparison — no fuzzy matching.
+    """
+    if not suffix or not suffix.isdigit() or len(suffix) < 4:
+        return None
+
+    df = _load_master_df()
+    if "Bank Name" not in df.columns:
+        return None
+
+    # Extract trailing N digits from each Bank Name value and compare as strings
+    bank_series = df["Bank Name"].astype(str)
+    extracted = bank_series.apply(lambda v: _last_n_digits(v, len(suffix)))
+    matches = df[extracted == suffix]
+    if matches.empty:
+        return None
+    return str(matches.iloc[0]["Bank Name"])
+
+
 @lru_cache
 def _load_master_df() -> pd.DataFrame:
     settings = get_settings()
