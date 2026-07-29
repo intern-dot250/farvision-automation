@@ -74,6 +74,23 @@ class RunResult:
     transactions: list[TransactionRowSet]
 
 
+def _build_import_tax_info_rows(txn: TransactionRowSet, link_ref_code: int, matched: dict) -> list[dict]:
+    """Contractor payments always need both a TDS row and a GST row on the
+    same Link Ref Code; Vendor payments only need the GST row. Any other
+    head keeps the original single Master-driven row."""
+    description = matched.get("Description", "")
+    base = {"Link Ref Code": link_ref_code, "Detail Link Ref Code": link_ref_code}
+
+    if txn.classification.head == "Contractor":
+        return [
+            {**base, "Deduction Type": "Tax deducted at source", "Description": description},
+            {**base, "Deduction Type": "Goods and Service Tax", "Description": description},
+        ]
+    if txn.classification.head == "Vendor":
+        return [{**base, "Deduction Type": "Goods and Service Tax", "Description": description}]
+    return [{**base, "Deduction Type": matched.get("Deduction Type", ""), "Description": description}]
+
+
 def _build_receipt_payment_rows(txn: TransactionRowSet, link_ref_code: int) -> dict[str, list[dict]]:
     matched = txn.classification.matched_master_row or {}
     debit_credit = "Debit" if txn.debit else "Credit"
@@ -124,14 +141,7 @@ def _build_receipt_payment_rows(txn: TransactionRowSet, link_ref_code: int) -> d
                 "Adjustment Amount": _format_amount(txn.debit or txn.credit),
             }
         ],
-        "ImportTaxInfo": [
-            {
-                "Link Ref Code": link_ref_code,
-                "Detail Link Ref Code": link_ref_code,
-                "Deduction Type": matched.get("Deduction Type", ""),
-                "Description": matched.get("Description", ""),
-            }
-        ],
+        "ImportTaxInfo": _build_import_tax_info_rows(txn, link_ref_code, matched),
     }
 
 

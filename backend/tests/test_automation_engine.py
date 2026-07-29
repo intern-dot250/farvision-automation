@@ -4,6 +4,7 @@ from unittest.mock import patch
 from app.services.automation_engine import (
     TransactionRowSet,
     _build_deposit_withdrawal_rows,
+    _build_receipt_payment_rows,
     _process_rows,
 )
 from app.services.classifier import ClassificationResult
@@ -44,6 +45,64 @@ def test_deposit_withdrawal_falls_back_to_generic_label_when_no_name_extracted()
 
     ledger = rows["LedgerDetails"][0]
     assert ledger["Payee Name"] == "Internal Transfer"
+
+
+def _receipt_payment_txn(head: str, matched_master_row: dict | None) -> TransactionRowSet:
+    return TransactionRowSet(
+        sl_no="1",
+        reference="REF1",
+        description="YIB-NEFT-REF1-Some Party-SBIN0007204-Contractor-STATE BANK OF INDIA",
+        debit=1000.0,
+        credit=0.0,
+        business_unit="Casa Romana",
+        txn_date=datetime(2026, 7, 8),
+        classification=ClassificationResult(
+            is_internal=False,
+            head=head,
+            payee_name="Some Party",
+            matched_master_row=matched_master_row,
+            needs_review=False,
+        ),
+        destination="receipt_payment",
+    )
+
+
+def test_contractor_head_gets_two_import_tax_info_rows():
+    txn = _receipt_payment_txn("Contractor", {"Description": "TDS ON CONTRACTORS"})
+    rows = _build_receipt_payment_rows(txn, link_ref_code=7)
+
+    tax_rows = rows["ImportTaxInfo"]
+    assert len(tax_rows) == 2
+    assert tax_rows[0]["Deduction Type"] == "Tax deducted at source"
+    assert tax_rows[0]["Description"] == "TDS ON CONTRACTORS"
+    assert tax_rows[1]["Deduction Type"] == "Goods and Service Tax"
+    assert tax_rows[1]["Description"] == "TDS ON CONTRACTORS"
+    for row in tax_rows:
+        assert row["Link Ref Code"] == 7
+        assert row["Detail Link Ref Code"] == 7
+
+
+def test_vendor_head_gets_single_gst_import_tax_info_row():
+    txn = _receipt_payment_txn("Vendor", {"Description": "Nil Rated-Service"})
+    rows = _build_receipt_payment_rows(txn, link_ref_code=3)
+
+    tax_rows = rows["ImportTaxInfo"]
+    assert len(tax_rows) == 1
+    assert tax_rows[0]["Deduction Type"] == "Goods and Service Tax"
+    assert tax_rows[0]["Description"] == "Nil Rated-Service"
+
+
+def test_other_head_keeps_original_master_driven_single_row():
+    txn = _receipt_payment_txn(
+        "SUNDRY CREDITORS - OTHER",
+        {"Deduction Type": "Something Else", "Description": "Some description"},
+    )
+    rows = _build_receipt_payment_rows(txn, link_ref_code=5)
+
+    tax_rows = rows["ImportTaxInfo"]
+    assert len(tax_rows) == 1
+    assert tax_rows[0]["Deduction Type"] == "Something Else"
+    assert tax_rows[0]["Description"] == "Some description"
 
 
 class _FakeSettings:
