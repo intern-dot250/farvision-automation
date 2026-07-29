@@ -9,15 +9,19 @@ class ParsedDescription:
     payee_name: str | None
     ifsc: str | None
     is_internal_format: bool
+    bank_name: str | None = None
 
 
 def parse_description(description: str) -> ParsedDescription:
-    """Extract payee name and IFSC code from a bank DESCRIPTION string.
+    """Extract payee name, IFSC code, and counterparty bank name from a bank
+    DESCRIPTION string.
 
     Real NEFT/RTGS narrations look like:
-      {channel}-{mode}-{utr}-{payee name}-{ifsc}-{bank name}
+      {channel}-{mode}-{utr}-{payee name}-{ifsc}-{head}-{bank name}
     Internal inter-account transfers (mode=TPT) have no IFSC segment, which
-    is how they're recognized as internal (confirmed business rule).
+    is how they're recognized as internal (confirmed business rule) - and
+    have no counterparty bank name either, since they're between our own
+    accounts.
     """
     tokens = description.split("-")
 
@@ -40,8 +44,13 @@ def parse_description(description: str) -> ParsedDescription:
     payee_tokens = tokens[3:ifsc_index]
     payee_name = "-".join(payee_tokens).strip() or None
 
+    # One token after IFSC is the head/category (Contractor, Vendor, ...);
+    # everything after that is the counterparty's bank name.
+    bank_name = "-".join(tokens[ifsc_index + 2:]).strip() or None
+
     return ParsedDescription(
         payee_name=payee_name,
         ifsc=tokens[ifsc_index].strip(),
         is_internal_format=False,
+        bank_name=bank_name,
     )

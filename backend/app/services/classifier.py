@@ -12,6 +12,7 @@ class ClassificationResult:
     matched_master_row: dict | None
     needs_review: bool
     review_reason: str | None = None
+    bank_name: str | None = None
 
 
 def _derive_head(master_row: dict) -> str:
@@ -61,6 +62,7 @@ def classify_transaction(description: str, existing_head: str | None = None) -> 
             review_reason=(
                 None if matched else f"No Master match for payee '{parsed.payee_name}' (given head: {trusted_head})"
             ),
+            bank_name=parsed.bank_name,
         )
 
     if parsed.is_internal_format:
@@ -82,6 +84,7 @@ def classify_transaction(description: str, existing_head: str | None = None) -> 
             matched_master_row=None,
             needs_review=True,
             review_reason=f"No Master match for payee '{parsed.payee_name}'",
+            bank_name=parsed.bank_name,
         )
 
     return ClassificationResult(
@@ -90,4 +93,5 @@ def classify_transaction(description: str, existing_head: str | None = None) -> 
         payee_name=parsed.payee_name,
         matched_master_row=matched,
         needs_review=False,
+        bank_name=parsed.bank_name,
     )

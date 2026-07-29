@@ -99,8 +99,17 @@ def test_receipt_payment_bank_name_comes_from_master_not_hardcoded():
     assert rows["ReceiptPayment"][0]["BankName"] == "PNB CURRENT A/C - (4184002100014005)"
 
 
-def test_receipt_payment_bank_name_blank_when_master_has_none():
+def test_receipt_payment_bank_name_falls_back_to_narration_when_master_has_none():
     txn = _receipt_payment_txn("Contractor", {})
+    txn.classification.bank_name = "FEDERAL BANK"
+    rows = _build_receipt_payment_rows(txn, link_ref_code=2)
+
+    assert rows["ReceiptPayment"][0]["BankName"] == "FEDERAL BANK"
+
+
+def test_receipt_payment_bank_name_blank_when_master_and_narration_have_none():
+    txn = _receipt_payment_txn("Contractor", {})
+    txn.classification.bank_name = None
     rows = _build_receipt_payment_rows(txn, link_ref_code=2)
 
     assert rows["ReceiptPayment"][0]["BankName"] == ""

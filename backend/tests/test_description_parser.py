@@ -9,6 +9,7 @@ def test_parses_neft_description_with_ifsc_and_payee():
     assert result.payee_name == "Rakiba BIBI"
     assert result.ifsc == "SBIN0007204"
     assert result.is_internal_format is False
+    assert result.bank_name == "STATE BANK OF INDIA"
 
 
 def test_parses_payee_name_with_multiple_words():
@@ -18,6 +19,7 @@ def test_parses_payee_name_with_multiple_words():
 
     assert result.payee_name == "Awesome Paint Planners Pvt Ltd"
     assert result.ifsc == "ICIC0003254"
+    assert result.bank_name == "ICICI BANK LIMITED"
 
 
 def test_internal_transfer_has_no_ifsc():
@@ -27,6 +29,7 @@ def test_internal_transfer_has_no_ifsc():
 
     assert result.is_internal_format is True
     assert result.ifsc is None
+    assert result.bank_name is None
 
 
 def test_internal_transfer_still_extracts_entity_name():
