@@ -8,9 +8,6 @@ from app.services import classifier, ledger_repository, ref_code, sheets_client,
 from app.services.classifier import ClassificationResult
 
 BANK_STATEMENT_WORKSHEET = "YES IDW 0490"
-# Identifies the bank account this statement belongs to. Hardcoded for the
-# single demo account; multi-account support would make this per-run config.
-BANK_NAME_FOR_STATEMENT = "Yes Bank Idw A/c 045563200000490"
 
 
 def _parse_amount(value: str) -> float:
@@ -166,6 +163,7 @@ def _build_receipt_payment_rows(txn: TransactionRowSet, link_ref_code: int) -> d
 
 
 def _build_deposit_withdrawal_rows(txn: TransactionRowSet, link_ref_code: int) -> dict[str, list[dict]]:
+    matched = txn.classification.matched_master_row or {}
     debit_credit = "Debit" if txn.debit else "Credit"
     doc_date = txn.txn_date.strftime("%d/%m/%Y")
     financial_year = _financial_year(txn.txn_date)
@@ -185,7 +183,7 @@ def _build_deposit_withdrawal_rows(txn: TransactionRowSet, link_ref_code: int) -
                 "Document Type": "Deposit / Withdrawal",
                 "Document Date": doc_date,
                 "Document No": "",
-                "BankName": BANK_NAME_FOR_STATEMENT,
+                "BankName": matched.get("Bank Name") or txn.classification.bank_name or "",
                 "EntryTypes": "Deposit / Withdrawal",
                 "Reference": txn.reference,
             }

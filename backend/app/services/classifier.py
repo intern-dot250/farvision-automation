@@ -43,12 +43,18 @@ def classify_transaction(description: str, existing_head: str | None = None) -> 
 
     if trusted_head:
         if trusted_head.upper() == "INTERNAL" or parsed.is_internal_format:
+            # Internal transfers stay "Internal"/not-needing-review regardless
+            # of whether Master has this counterparty - but still look it up,
+            # so a real Bank Name (etc.) can be pulled from Master when it
+            # does have an entry for them.
+            internal_matched = master_repository.find_party(parsed.payee_name)
             return ClassificationResult(
                 is_internal=True,
                 head="Internal",
                 payee_name=parsed.payee_name,
-                matched_master_row=None,
+                matched_master_row=internal_matched,
                 needs_review=False,
+                bank_name=parsed.bank_name,
             )
 
         matched = master_repository.find_party(parsed.payee_name)
@@ -66,12 +72,14 @@ def classify_transaction(description: str, existing_head: str | None = None) -> 
         )
 
     if parsed.is_internal_format:
+        internal_matched = master_repository.find_party(parsed.payee_name)
         return ClassificationResult(
             is_internal=True,
             head="Internal",
             payee_name=parsed.payee_name,
-            matched_master_row=None,
+            matched_master_row=internal_matched,
             needs_review=False,
+            bank_name=parsed.bank_name,
         )
 
     matched = master_repository.find_party(parsed.payee_name)

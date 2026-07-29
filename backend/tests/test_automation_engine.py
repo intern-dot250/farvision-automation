@@ -35,7 +35,11 @@ def test_format_amount_small_number_no_grouping():
     assert _format_amount(500) == "500"
 
 
-def _internal_txn(payee_name: str | None) -> TransactionRowSet:
+def _internal_txn(
+    payee_name: str | None,
+    matched_master_row: dict | None = None,
+    bank_name: str | None = None,
+) -> TransactionRowSet:
     return TransactionRowSet(
         sl_no="1",
         reference="",
@@ -48,8 +52,9 @@ def _internal_txn(payee_name: str | None) -> TransactionRowSet:
             is_internal=True,
             head="Internal",
             payee_name=payee_name,
-            matched_master_row=None,
+            matched_master_row=matched_master_row,
             needs_review=False,
+            bank_name=bank_name,
         ),
         destination="deposit_withdrawal",
     )
@@ -70,6 +75,33 @@ def test_deposit_withdrawal_falls_back_to_generic_label_when_no_name_extracted()
 
     ledger = rows["LedgerDetails"][0]
     assert ledger["Payee Name"] == "Internal Transfer"
+
+
+def test_deposit_withdrawal_bank_name_comes_from_master_first():
+    txn = _internal_txn(
+        "DWARKADHIS PROJECTS PRIVATE LIMITED",
+        matched_master_row={"Bank Name": "UBI ESCROW A/C CR- 497801010000168"},
+        bank_name="SOME NARRATION BANK",
+    )
+    rows = _build_deposit_withdrawal_rows(txn, link_ref_code=1)
+
+    assert rows["DepositWithdrawal"][0]["BankName"] == "UBI ESCROW A/C CR- 497801010000168"
+
+
+def test_deposit_withdrawal_bank_name_falls_back_to_narration_when_master_has_none():
+    txn = _internal_txn(
+        "DWARKADHIS PROJECTS PRIVATE LIMITED", matched_master_row={}, bank_name="SOME NARRATION BANK"
+    )
+    rows = _build_deposit_withdrawal_rows(txn, link_ref_code=1)
+
+    assert rows["DepositWithdrawal"][0]["BankName"] == "SOME NARRATION BANK"
+
+
+def test_deposit_withdrawal_bank_name_blank_when_neither_has_it():
+    txn = _internal_txn("DWARKADHIS PROJECTS PRIVATE LIMITED", matched_master_row={}, bank_name=None)
+    rows = _build_deposit_withdrawal_rows(txn, link_ref_code=1)
+
+    assert rows["DepositWithdrawal"][0]["BankName"] == ""
 
 
 def _receipt_payment_txn(head: str, matched_master_row: dict | None) -> TransactionRowSet:
