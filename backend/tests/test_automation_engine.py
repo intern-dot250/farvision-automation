@@ -256,6 +256,7 @@ def test_non_duplicate_transaction_when_reference_absent_from_both_sheets():
             "DEBITS": "1000",
             "CREDITS": "",
             "BUSINESS UNIT": "Casa Romana",
+            "source_sheet": "YES AH IDW 2457",
         }
     ]
 
@@ -270,3 +271,25 @@ def test_non_duplicate_transaction_when_reference_absent_from_both_sheets():
 
     assert len(transactions) == 1
     assert transactions[0].destination == "receipt_payment"
+    assert transactions[0].source_sheet == "YES AH IDW 2457"
+
+
+def test_receipt_payment_bank_name_uses_source_sheet_when_present():
+    txn = _receipt_payment_txn("Contractor", {"Bank Name": "PNB CURRENT A/C -"})
+    txn.source_sheet = "YES AH IDW 2457"
+    rows = _build_receipt_payment_rows(txn, link_ref_code=2)
+
+    # Source sheet wins over Master and narration bank name.
+    assert rows["ReceiptPayment"][0]["BankName"] == "YES AH IDW 2457"
+
+
+def test_deposit_withdrawal_bank_name_uses_source_sheet_when_present():
+    txn = _internal_txn(
+        "DWARKADHIS PROJECTS PRIVATE LIMITED",
+        matched_master_row={"Bank Name": "UBI ESCROW A/C CR- 497801010000168"},
+        bank_name="SOME NARRATION BANK",
+    )
+    txn.source_sheet = "YES Rera 0377"
+    rows = _build_deposit_withdrawal_rows(txn, link_ref_code=1)
+
+    assert rows["DepositWithdrawal"][0]["BankName"] == "YES Rera 0377"

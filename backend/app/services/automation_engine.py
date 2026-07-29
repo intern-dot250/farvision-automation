@@ -114,6 +114,18 @@ def _build_receipt_payment_rows(txn: TransactionRowSet, link_ref_code: int) -> d
     debit_credit = "Debit" if txn.debit else "Credit"
     doc_date = txn.txn_date.strftime("%d/%m/%Y")
     financial_year = _financial_year(txn.txn_date)
+    # The BankName column identifies our own bank account for the
+    # transaction. When the upload came from a multi-tab workbook, the
+    # source tab name (e.g. "YES AH IDW 2457") IS the bank account, so
+    # prefer it; otherwise fall back to the Master lookup, then the
+    # counterparty bank parsed from the narration (used when running
+    # from the configured Google Sheet, where there is no source tab).
+    bank_name = (
+        txn.source_sheet
+        or matched.get("Bank Name")
+        or txn.classification.bank_name
+        or ""
+    )
 
     return {
         "ReceiptPayment": [
@@ -125,7 +137,7 @@ def _build_receipt_payment_rows(txn: TransactionRowSet, link_ref_code: int) -> d
                 "Document Date": doc_date,
                 "Document No": "",
                 "Narration": txn.description,
-                "BankName": matched.get("Bank Name") or txn.classification.bank_name or "",
+                "BankName": bank_name,
                 "EntryTypes": "RECEIPT / PAYMENT",
                 "Reference": txn.reference,
             }
@@ -177,6 +189,15 @@ def _build_deposit_withdrawal_rows(txn: TransactionRowSet, link_ref_code: int) -
     # the generic label (e.g. non-TPT internal formats with no extractable
     # name).
     payee_display = txn.classification.payee_name or "Internal Transfer"
+    # The BankName column identifies our own bank account. The source tab
+    # name IS the bank account when uploading from a multi-tab workbook,
+    # so prefer it; otherwise fall back to Master / narration lookup.
+    bank_name = (
+        txn.source_sheet
+        or matched.get("Bank Name")
+        or txn.classification.bank_name
+        or ""
+    )
 
     return {
         "DepositWithdrawal": [
@@ -188,7 +209,7 @@ def _build_deposit_withdrawal_rows(txn: TransactionRowSet, link_ref_code: int) -
                 "Document Type": "Deposit / Withdrawal",
                 "Document Date": doc_date,
                 "Document No": "",
-                "BankName": matched.get("Bank Name") or txn.classification.bank_name or "",
+                "BankName": bank_name,
                 "EntryTypes": "Deposit / Withdrawal",
                 "Reference": txn.reference,
             }
