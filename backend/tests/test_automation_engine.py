@@ -275,6 +275,42 @@ def test_non_duplicate_transaction_when_reference_absent_from_both_sheets():
     assert transactions[0].source_sheet == "YES AH IDW 2457"
 
 
+def test_collection_head_routes_to_deposit_withdrawal_not_review():
+    # "NEFT Cr-{IFSC}-{Payee}-..." narrations don't match the usual
+    # "{channel}-{mode}-{utr}-{payee}-{ifsc}-{head}-{bank}" token shape, so
+    # payee_name parses out as None - Collection must still route to
+    # deposit_withdrawal (which tolerates a missing payee name), not get
+    # flagged for review just because the narration shape is unusual.
+    bank_rows = [
+        {
+            "SL#": "168",
+            "REFERENCE": "REF-COLLECTION-1",
+            "DESCRIPTION": "NEFT Cr-ICIC0SF0002-ROHITAS KUMAR-DWARKADHIS",
+            "TXN DATE": "06-Jul-2026",
+            "DEBITS": "",
+            "CREDITS": "50000",
+            "BUSINESS UNIT": "Casa Romana",
+            "HEAD": "Collection",
+            "source_sheet": "YES Master 0264",
+        }
+    ]
+
+    with patch(
+        "app.services.automation_engine.sheets_client.get_column_values",
+        return_value=set(),
+    ), patch(
+        "app.services.automation_engine.classifier.master_repository.find_party",
+        return_value=None,
+    ):
+        transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
+
+    assert len(transactions) == 1
+    txn = transactions[0]
+    assert txn.classification.head == "Collection"
+    assert txn.classification.needs_review is False
+    assert txn.destination == "deposit_withdrawal"
+
+
 def test_receipt_payment_bank_name_uses_source_sheet_when_present(monkeypatch):
     # _resolve_own_bank_name calls find_bank_by_account_suffix → _load_master_df →
     # live Google Sheets. Stub the loader so the test stays offline.

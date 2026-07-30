@@ -104,13 +104,15 @@ def parse_statement_file(filename: str, content: bytes, sheet_name: str | None =
 
     df = df.fillna("")
     records = df.to_dict(orient="records")
-    # Accounts intentionally leaves fully blank rows in the source workbook
-    # (spacers between sections) - drop them rather than trying to classify
-    # them as failed transactions. "source_sheet" is synthetic metadata we
-    # add above, always non-blank, so it's excluded here - otherwise every
-    # row would look "non-blank" and this filter would never catch anything.
+    # Accounts intentionally leaves blank spacer rows in the source workbook
+    # (between sections) - drop them rather than trying to classify them as
+    # failed transactions. Checked against REQUIRED_COLUMNS specifically
+    # (not every column) - a spacer row can still carry stray content in an
+    # unrelated column (a note, a leftover SL# tag, our own synthetic
+    # "source_sheet" tag, etc.) and still be a spacer, since none of that is
+    # actual transaction data.
     return [
         record
         for record in records
-        if any(str(value).strip() for key, value in record.items() if key != "source_sheet")
+        if any(str(record.get(col, "")).strip() for col in REQUIRED_COLUMNS)
     ]

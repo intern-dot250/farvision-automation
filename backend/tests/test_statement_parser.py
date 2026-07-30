@@ -109,6 +109,40 @@ def test_fully_blank_rows_are_dropped_even_with_source_sheet_tagged():
     assert rows[0]["source_sheet"] == "YES AH IDW 2457"
 
 
+def test_spacer_row_dropped_even_with_stray_content_in_unrelated_column():
+    # Regression: a spacer row can carry leftover content in a column that
+    # isn't actually transaction data (a note, a stray SL# tag, etc.) - it
+    # must still be dropped, since none of the REQUIRED_COLUMNS have
+    # anything in them.
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer) as writer:
+        pd.DataFrame(
+            [
+                {
+                    "SL#": "1",
+                    "TXN DATE": "22-Jul-2026",
+                    "DESCRIPTION": "YIB-NEFT-REF1-Payee1-SBIN0007204-Contractor-STATE BANK OF INDIA",
+                    "REFERENCE": "REF1",
+                    "DEBITS": "1000",
+                    "CREDITS": "",
+                },
+                {
+                    "SL#": "some stray note left by accounts",
+                    "TXN DATE": "",
+                    "DESCRIPTION": "",
+                    "REFERENCE": "",
+                    "DEBITS": "",
+                    "CREDITS": "",
+                },
+            ]
+        ).to_excel(writer, sheet_name="YES Master 0264", index=False)
+
+    rows = parse_statement_file("statement.xlsx", buffer.getvalue())
+
+    assert len(rows) == 1
+    assert rows[0]["REFERENCE"] == "REF1"
+
+
 def _two_sheet_workbook() -> bytes:
     df = pd.DataFrame(
         [

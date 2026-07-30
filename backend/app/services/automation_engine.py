@@ -296,7 +296,7 @@ def _process_rows_stream(bank_rows: list[dict], run_id: str, settings):
                     "review"
                     if classification.needs_review
                     else "deposit_withdrawal"
-                    if classification.is_internal
+                    if classification.is_internal or classification.head.strip().upper() == "COLLECTION"
                     else "receipt_payment"
                 )
 
