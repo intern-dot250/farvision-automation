@@ -26,6 +26,7 @@ export default function DashboardPage() {
   const [sheetOptionsLoading, setSheetOptionsLoading] = useState(false);
   const [totalSheets, setTotalSheets] = useState(0);
   const [ignoredSheets, setIgnoredSheets] = useState<string[]>([]);
+  const [showIgnored, setShowIgnored] = useState(false);
   const [progress, setProgress] = useState<UploadProgress | null>(null);
 
   const loadStats = () => {
@@ -58,6 +59,7 @@ export default function DashboardPage() {
     setSheetName("");
     setTotalSheets(0);
     setIgnoredSheets([]);
+    setShowIgnored(false);
 
     if (!selected || !/\.xlsx?$/i.test(selected.name)) {
       return;
@@ -202,18 +204,27 @@ export default function DashboardPage() {
                   : " — all used"}
               </span>
               {ignoredSheets.length > 0 && (
-                <select
-                  multiple
-                  size={Math.min(ignoredSheets.length, 6)}
-                  className="mt-1 w-full rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400"
-                  disabled
-                >
-                  {ignoredSheets.map((name) => (
-                    <option key={name} value={name}>
-                      {name}
-                    </option>
-                  ))}
-                </select>
+                <div className="mt-1">
+                  <button
+                    type="button"
+                    onClick={() => setShowIgnored(!showIgnored)}
+                    className="rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-xs text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                  >
+                    {showIgnored ? "Hide" : `Show ${ignoredSheets.length} ignored sheets`}
+                  </button>
+                  {showIgnored && (
+                    <ul className="mt-1.5 max-h-48 overflow-y-auto rounded-md border border-zinc-200 bg-white p-2 text-xs dark:border-zinc-700 dark:bg-zinc-900">
+                      {ignoredSheets.map((name) => (
+                        <li
+                          key={name}
+                          className="whitespace-nowrap px-2 py-0.5 text-zinc-600 dark:text-zinc-400"
+                        >
+                          {name}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               )}
             </div>
           )}
