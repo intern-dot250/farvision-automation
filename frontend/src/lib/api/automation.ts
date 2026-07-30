@@ -33,6 +33,8 @@ export function runAutomation(dryRun: boolean): Promise<RunResponse> {
 
 export type SheetNamesResponse = {
   sheets: string[];
+  total_sheets: number;
+  ignored_sheets: string[];
 };
 
 export async function getSheetNames(file: File): Promise<SheetNamesResponse> {

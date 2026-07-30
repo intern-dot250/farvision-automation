@@ -46,10 +46,14 @@ def _build_run_response(result: automation_engine.RunResult) -> RunResponse:
 async def list_sheet_names(file: UploadFile = File(...)) -> SheetNamesResponse:
     content = await file.read()
     try:
-        sheets = statement_parser.list_candidate_sheets(file.filename or "", content)
+        candidates = statement_parser.list_candidate_sheets(file.filename or "", content)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return SheetNamesResponse(sheets=sheets)
+    return SheetNamesResponse(
+        sheets=candidates.included,
+        total_sheets=len(candidates.included) + len(candidates.ignored),
+        ignored_sheets=candidates.ignored,
+    )
 
 
 @router.post("/run", response_model=RunResponse, summary="Run the automation engine against the configured Google Sheet")

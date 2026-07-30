@@ -24,6 +24,8 @@ export default function DashboardPage() {
   const [sheetName, setSheetName] = useState("");
   const [sheetOptions, setSheetOptions] = useState<string[]>([]);
   const [sheetOptionsLoading, setSheetOptionsLoading] = useState(false);
+  const [totalSheets, setTotalSheets] = useState(0);
+  const [ignoredSheets, setIgnoredSheets] = useState<string[]>([]);
   const [progress, setProgress] = useState<UploadProgress | null>(null);
 
   const loadStats = () => {
@@ -54,6 +56,8 @@ export default function DashboardPage() {
     setRunError(null);
     setSheetOptions([]);
     setSheetName("");
+    setTotalSheets(0);
+    setIgnoredSheets([]);
 
     if (!selected || !/\.xlsx?$/i.test(selected.name)) {
       return;
@@ -63,6 +67,8 @@ export default function DashboardPage() {
     getSheetNames(selected)
       .then((data) => {
         setSheetOptions(data.sheets);
+        setTotalSheets(data.total_sheets);
+        setIgnoredSheets(data.ignored_sheets);
         if (data.sheets.length === 1) {
           setSheetName(data.sheets[0]);
         }
@@ -185,6 +191,22 @@ export default function DashboardPage() {
                 ))}
               </select>
             </label>
+          )}
+
+          {!sheetOptionsLoading && totalSheets > 0 && (
+            <div className="flex flex-col gap-1 rounded-md border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+              <span className="text-sm text-zinc-600 dark:text-zinc-400">
+                {totalSheets} sheet{totalSheets === 1 ? "" : "s"} found in file
+                {ignoredSheets.length > 0
+                  ? ` — ${ignoredSheets.length} ignored (no transaction data detected)`
+                  : " — all used"}
+              </span>
+              {ignoredSheets.length > 0 && (
+                <span className="text-xs text-zinc-500 dark:text-zinc-500">
+                  Ignored: {ignoredSheets.join(", ")}
+                </span>
+              )}
+            </div>
           )}
 
           <label className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-400">

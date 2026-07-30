@@ -28,3 +28,5 @@ class RunResponse(BaseModel):
 
 class SheetNamesResponse(BaseModel):
     sheets: list[str]
+    total_sheets: int
+    ignored_sheets: list[str]

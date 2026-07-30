@@ -200,7 +200,15 @@ def test_list_candidate_sheets_returns_only_matching_tabs():
 
     result = list_candidate_sheets("statement.xlsx", content)
 
-    assert result == ["YES Rera 0377"]
+    assert result.included == ["YES Rera 0377"]
+
+
+def test_list_candidate_sheets_reports_ignored_tabs():
+    content = _two_sheet_workbook()
+
+    result = list_candidate_sheets("statement.xlsx", content)
+
+    assert result.ignored == ["Index"]
 
 
 def test_multiple_sheets_with_data_are_concatenated():
@@ -263,7 +271,5 @@ def test_multiple_sheets_non_txn_sheets_are_ignored():
 def test_list_candidate_sheets_empty_for_csv():
     result = list_candidate_sheets("statement.csv", b"a,b\n1,2\n")
 
-    assert result == []
-    result = list_candidate_sheets("statement.csv", b"a,b\n1,2\n")
-
-    assert result == []
+    assert result.included == []
+    assert result.ignored == []

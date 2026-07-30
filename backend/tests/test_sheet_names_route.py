@@ -36,7 +36,11 @@ def test_sheet_names_route_returns_candidate_sheets():
     )
 
     assert response.status_code == 200
-    assert response.json() == {"sheets": ["YES Rera 0377"]}
+    assert response.json() == {
+        "sheets": ["YES Rera 0377"],
+        "total_sheets": 2,
+        "ignored_sheets": ["Index"],
+    }
 
 
 def test_sheet_names_route_returns_empty_for_csv():
@@ -46,4 +50,4 @@ def test_sheet_names_route_returns_empty_for_csv():
     )
 
     assert response.status_code == 200
-    assert response.json() == {"sheets": []}
+    assert response.json() == {"sheets": [], "total_sheets": 0, "ignored_sheets": []}

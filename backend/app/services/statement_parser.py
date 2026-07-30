@@ -1,8 +1,15 @@
 import io
+from dataclasses import dataclass
 
 import pandas as pd
 
 REQUIRED_COLUMNS = ["TXN DATE", "DESCRIPTION", "REFERENCE", "DEBITS", "CREDITS"]
+
+
+@dataclass
+class SheetCandidates:
+    included: list[str]
+    ignored: list[str]
 
 # Real statement exports sometimes carry a summary row (e.g. "LAST UPDATE ...")
 # above the real header, so the header isn't always row 0.
@@ -35,17 +42,22 @@ def _resolve_sheet_name(requested: str, available: list[str]) -> str | None:
     return None
 
 
-def list_candidate_sheets(filename: str, content: bytes) -> list[str]:
-    """Sheet names in an uploaded workbook that actually contain transaction
-    data (same header-detection used by parse_statement_file), so the
-    frontend can offer a dropdown of real choices instead of the user
-    guessing a tab name after a failed upload. CSV files have no sheets.
+def list_candidate_sheets(filename: str, content: bytes) -> SheetCandidates:
+    """Splits every sheet name in an uploaded workbook into "included" (has a
+    matching header row - same detection used by parse_statement_file, so
+    the frontend can offer a dropdown of real choices instead of the user
+    guessing a tab name after a failed upload) and "ignored" (everything
+    else, e.g. an Index/Dashboard tab, or one with a differently-shaped
+    header) - so the frontend can also show what got skipped and why. CSV
+    files have no sheets, so both lists are empty for those.
     """
     if filename.lower().endswith(".csv"):
-        return []
+        return SheetCandidates(included=[], ignored=[])
 
     sheets = pd.read_excel(io.BytesIO(content), dtype=str, header=None, sheet_name=None)
-    return [name for name, raw in sheets.items() if _find_header_row(raw) is not None]
+    included = [name for name, raw in sheets.items() if _find_header_row(raw) is not None]
+    ignored = [name for name in sheets if name not in included]
+    return SheetCandidates(included=included, ignored=ignored)
 
 
 def parse_statement_file(filename: str, content: bytes, sheet_name: str | None = None) -> list[dict]:
