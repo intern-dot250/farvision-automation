@@ -270,7 +270,9 @@ def _process_rows_stream(bank_rows: list[dict], run_id: str, settings):
             txn_date = _parse_txn_date(str(row["TXN DATE"]))
             existing_head = str(row.get("HEAD", "")).strip()
 
-            classification = classifier.classify_transaction(description, existing_head=existing_head)
+            classification = classifier.classify_transaction(
+                description, existing_head=existing_head, is_credit=credit > 0
+            )
 
             if reference and (reference in rp_refs or reference in dw_refs):
                 logger.info(f"[{run_id}] Skipping duplicate SL#{sl_no} (reference={reference})")

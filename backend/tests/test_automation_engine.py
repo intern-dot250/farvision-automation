@@ -291,12 +291,11 @@ def test_non_duplicate_transaction_when_reference_absent_from_both_sheets():
 
 
 def test_collection_head_routes_to_receipt_payment_not_review():
-    # "NEFT Cr-{IFSC}-{Payee}-..." narrations don't match the usual
-    # "{channel}-{mode}-{utr}-{payee}-{ifsc}-{head}-{bank}" token shape, so
-    # payee_name parses out as None - Collection routes to Receipt/Payment
-    # (business rule) and must not get flagged for review just because the
-    # narration shape is unusual; the Account Head/Payee Name fallback to
-    # the trusted head covers the missing payee name.
+    # Collection routes to Receipt/Payment (business rule) and must not get
+    # flagged for review. "NEFT Cr-{IFSC}-{Payee}-..." narrations don't
+    # match the usual "{channel}-{mode}-{utr}-{payee}-{ifsc}-{head}-{bank}"
+    # token shape, but description_parser has a dedicated credit-style
+    # branch for it, so the payee name still parses out correctly.
     bank_rows = [
         {
             "SL#": "168",
@@ -325,6 +324,7 @@ def test_collection_head_routes_to_receipt_payment_not_review():
     assert txn.classification.head == "Collection"
     assert txn.classification.needs_review is False
     assert txn.destination == "receipt_payment"
+    assert txn.classification.payee_name == "ROHITAS KUMAR"
 
 
 def test_receipt_payment_bank_name_uses_source_sheet_when_present(monkeypatch):

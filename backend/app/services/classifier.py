@@ -31,14 +31,20 @@ def _derive_head(master_row: dict) -> str:
     return str(master_row.get("Account Head") or "Unclassified")
 
 
-def classify_transaction(description: str, existing_head: str | None = None) -> ClassificationResult:
+def classify_transaction(
+    description: str, existing_head: str | None = None, is_credit: bool | None = None
+) -> ClassificationResult:
     """Classify a transaction. If ``existing_head`` is provided (non-empty —
     e.g. already filled in on an uploaded statement), it's trusted for the
     Internal/Non-Internal decision and displayed head label instead of being
     re-derived, but a Master lookup still runs to populate Account
     Head/Parent Account Head/Payment Mode needed for the output rows.
+
+    ``is_credit`` (money coming in vs. going out) disambiguates which side
+    of a UPI narration's "From:"/"To:" pair is the actual counterparty -
+    see description_parser._parse_upi().
     """
-    parsed = parse_description(description)
+    parsed = parse_description(description, is_credit=is_credit)
     trusted_head = existing_head.strip() if existing_head else ""
 
     if trusted_head:
