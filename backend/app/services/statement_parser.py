@@ -111,8 +111,16 @@ def parse_statement_file(filename: str, content: bytes, sheet_name: str | None =
     # unrelated column (a note, a leftover SL# tag, our own synthetic
     # "source_sheet" tag, etc.) and still be a spacer, since none of that is
     # actual transaction data.
-    return [
+    records = [
         record
         for record in records
         if any(str(record.get(col, "")).strip() for col in REQUIRED_COLUMNS)
+    ]
+    # "B/F" (Brought Forward) rows are a standard bank-statement convention
+    # carrying the running balance from a previous period/page forward -
+    # not a real transaction, regardless of which file/sheet was uploaded.
+    return [
+        record
+        for record in records
+        if not str(record.get("DESCRIPTION", "")).strip().upper().startswith("B/F")
     ]

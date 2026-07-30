@@ -75,6 +75,20 @@ def test_fully_blank_rows_are_dropped():
     assert [r["SL#"] for r in rows] == ["1", "2"]
 
 
+def test_brought_forward_rows_are_dropped():
+    csv_content = (
+        "SL#,TXN DATE,DESCRIPTION,REFERENCE,DEBITS,CREDITS\n"
+        "1,01-Apr-2026,B/F,,,\n"
+        "2,22-Jul-2026,YIB-NEFT-REF1-Some Payee-SBIN0007204-Contractor-STATE BANK OF INDIA,REF1,1000,\n"
+        "3,23-Jul-2026,b/f balance carried forward,,,\n"
+    ).encode()
+
+    rows = parse_statement_file("statement.csv", csv_content)
+
+    assert len(rows) == 1
+    assert rows[0]["SL#"] == "2"
+
+
 def test_fully_blank_rows_are_dropped_even_with_source_sheet_tagged():
     # Regression: source_sheet is set on every row (including blank ones)
     # before the blank-row filter runs, so the filter must ignore it -
