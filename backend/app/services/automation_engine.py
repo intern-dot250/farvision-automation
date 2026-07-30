@@ -46,6 +46,20 @@ def _format_amount(amount: float) -> int | str:
     return int(round(amount)) if amount else ""
 
 
+_BUSINESS_UNIT_ALIASES = {
+    "HO": "DWARKADHIS PROJECTS PVT. LTD-HO",
+}
+
+
+def _normalize_business_unit(value: str) -> str:
+    """Expands known shorthand Business Unit values to the full form Master
+    actually uses (e.g. "HO" -> "DWARKADHIS PROJECTS PVT. LTD-HO") - other
+    values (Aravali Heights, Casa Romana, ...) already match Master as-is
+    and pass through unchanged."""
+    key = value.strip().upper()
+    return _BUSINESS_UNIT_ALIASES.get(key, value)
+
+
 def _resolve_own_bank_name(source_sheet, matched_master, narration_bank) -> str:
     """Resolve the BankName value for a Receipt/Payment or Deposit/
     Withdrawal row. When the transaction came from a multi-tab workbook
@@ -263,6 +277,12 @@ def _process_rows_stream(bank_rows: list[dict], run_id: str, settings):
         reference = str(row.get("REFERENCE", "")).strip()
         source_sheet = str(row.get("source_sheet", "")).strip() or None
 
+        # Extracted before the try block (rather than as its first line) so
+        # it's always available in the except branch below too, regardless
+        # of which later field fails to parse - _normalize_business_unit()
+        # itself can never raise.
+        business_unit = _normalize_business_unit(row.get("BUSINESS UNIT", ""))
+
         try:
             description = row.get("DESCRIPTION", "")
             debit = _parse_amount(str(row.get("DEBITS", "")))
@@ -287,7 +307,7 @@ def _process_rows_stream(bank_rows: list[dict], run_id: str, settings):
                         description=description,
                         debit=0,
                         credit=0,
-                        business_unit=row.get("BUSINESS UNIT", ""),
+                        business_unit=business_unit,
                         txn_date=txn_date,
                         classification=classification,
                         destination="duplicate",
@@ -318,7 +338,7 @@ def _process_rows_stream(bank_rows: list[dict], run_id: str, settings):
                         description=description,
                         debit=debit,
                         credit=credit,
-                        business_unit=row.get("BUSINESS UNIT", ""),
+                        business_unit=business_unit,
                         txn_date=txn_date,
                         classification=classification,
                         destination=destination,
@@ -337,7 +357,7 @@ def _process_rows_stream(bank_rows: list[dict], run_id: str, settings):
                     description=row.get("DESCRIPTION", ""),
                     debit=0,
                     credit=0,
-                    business_unit=row.get("BUSINESS UNIT", ""),
+                    business_unit=business_unit,
                     txn_date=datetime.now(),
                     classification=classifier.ClassificationResult(
                         is_internal=False, head="", payee_name=None, matched_master_row=None, needs_review=True,

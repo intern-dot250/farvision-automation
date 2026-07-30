@@ -7,6 +7,7 @@ from app.services.automation_engine import (
     _build_deposit_withdrawal_rows,
     _build_receipt_payment_rows,
     _format_amount,
+    _normalize_business_unit,
     _process_rows,
 )
 from app.services.classifier import ClassificationResult
@@ -34,6 +35,18 @@ def test_format_amount_zero_is_blank():
 
 def test_format_amount_small_number():
     assert _format_amount(500) == 500
+
+
+def test_normalize_business_unit_expands_ho():
+    assert _normalize_business_unit("HO") == "DWARKADHIS PROJECTS PVT. LTD-HO"
+    assert _normalize_business_unit("ho") == "DWARKADHIS PROJECTS PVT. LTD-HO"
+    assert _normalize_business_unit("  Ho  ") == "DWARKADHIS PROJECTS PVT. LTD-HO"
+
+
+def test_normalize_business_unit_leaves_others_unchanged():
+    assert _normalize_business_unit("Casa Romana") == "Casa Romana"
+    assert _normalize_business_unit("Aravali Heights") == "Aravali Heights"
+    assert _normalize_business_unit("") == ""
 
 
 def _internal_txn(
@@ -288,6 +301,33 @@ def test_non_duplicate_transaction_when_reference_absent_from_both_sheets():
     assert len(transactions) == 1
     assert transactions[0].destination == "receipt_payment"
     assert transactions[0].source_sheet == "YES AH IDW 2457"
+
+
+def test_process_rows_expands_ho_business_unit():
+    bank_rows = [
+        {
+            "SL#": "1",
+            "REFERENCE": "NEWREF002",
+            "DESCRIPTION": "YIB-NEFT-NEWREF002-Rakiba BIBI-SBIN0007204-Contractor-STATE BANK OF INDIA",
+            "TXN DATE": "22-Jul-2026",
+            "DEBITS": "1000",
+            "CREDITS": "",
+            "BUSINESS UNIT": "HO",
+            "source_sheet": "YES IDW 0490",
+        }
+    ]
+
+    with patch(
+        "app.services.automation_engine.sheets_client.get_column_values",
+        return_value=set(),
+    ), patch(
+        "app.services.automation_engine.classifier.master_repository.find_party",
+        return_value={"Account Head": "Rakiba BIBI", "Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS"},
+    ):
+        transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
+
+    assert len(transactions) == 1
+    assert transactions[0].business_unit == "DWARKADHIS PROJECTS PVT. LTD-HO"
 
 
 def test_collection_head_routes_to_receipt_payment_not_review():
