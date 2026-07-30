@@ -97,11 +97,14 @@ export async function runAutomationUploadStream(
   file: File,
   dryRun: boolean,
   sheetName: string | undefined,
+  sheetNames: string[] | undefined,
   onProgress: (progress: UploadProgress) => void,
 ): Promise<RunResponse> {
   const formData = new FormData();
   formData.append("file", file);
-  if (sheetName) {
+  if (sheetNames && sheetNames.length > 0) {
+    sheetNames.forEach((name) => formData.append("sheet_names", name));
+  } else if (sheetName) {
     formData.append("sheet_name", sheetName);
   }
 

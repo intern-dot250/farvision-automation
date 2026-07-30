@@ -21,8 +21,8 @@ export default function DashboardPage() {
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<RunResponse | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
-  const [sheetName, setSheetName] = useState("");
   const [sheetOptions, setSheetOptions] = useState<string[]>([]);
+  const [selectedSheetNames, setSelectedSheetNames] = useState<string[]>([]);
   const [sheetOptionsLoading, setSheetOptionsLoading] = useState(false);
   const [totalSheets, setTotalSheets] = useState(0);
   const [ignoredSheets, setIgnoredSheets] = useState<string[]>([]);
@@ -57,6 +57,7 @@ export default function DashboardPage() {
     setRunError(null);
     setSheetOptions([]);
     setSheetName("");
+    setSelectedSheetNames([]);
     setTotalSheets(0);
     setIgnoredSheets([]);
     setShowIgnored(false);
@@ -73,6 +74,9 @@ export default function DashboardPage() {
         setIgnoredSheets(data.ignored_sheets);
         if (data.sheets.length === 1) {
           setSheetName(data.sheets[0]);
+          setSelectedSheetNames(data.sheets.slice(0, 1));
+        } else {
+          setSelectedSheetNames(data.sheets.slice(0, 1));
         }
       })
       .catch(() => setSheetOptions([]))
@@ -89,7 +93,10 @@ export default function DashboardPage() {
       const response = await runAutomationUploadStream(
         file,
         dryRun,
-        sheetName || undefined,
+        undefined,
+        selectedSheetNames.length > 0 && selectedSheetNames.length < sheetOptions.length
+          ? selectedSheetNames
+          : undefined,
         setProgress,
       );
       setResult(response);
@@ -173,25 +180,53 @@ export default function DashboardPage() {
           )}
 
           {!sheetOptionsLoading && sheetOptions.length > 1 && (
-            <label className="flex flex-col gap-1">
+            <label className="flex flex-col gap-2">
               <span className="text-sm text-zinc-600 dark:text-zinc-400">
-                {sheetName
-                  ? `Using sheet: ${sheetName}`
-                  : `${sheetOptions.length} sheets found — processing all together`}
+                {selectedSheetNames.length === 0
+                  ? `${sheetOptions.length} sheets — processing all (nothing selected)`
+                  : selectedSheetNames.length === sheetOptions.length
+                    ? `${sheetOptions.length} sheets — processing all`
+                    : `${selectedSheetNames.length} selected: ${selectedSheetNames.join(", ")}`}
               </span>
-              <select
-                value={sheetName}
-                onChange={(e) => setSheetName(e.target.value)}
-                disabled={running}
-                className="w-fit rounded-md border border-zinc-300 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+              <div className="max-h-60 overflow-y-auto rounded-md border border-zinc-300 p-2 dark:border-zinc-700 dark:bg-zinc-900">
+                {sheetOptions.map((name) => {
+                  const checked = selectedSheetNames.includes(name);
+                  return (
+                    <label
+                      key={name}
+                      className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 hover:bg-zinc-50 dark:hover:bg-zinc-800"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(e) => {
+                          setSelectedSheetNames((prev) =>
+                            e.target.checked
+                              ? [...prev, name]
+                              : prev.filter((n) => n !== name)
+                          );
+                        }}
+                        disabled={running}
+                        className="rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                      />
+                      <span className="text-sm text-zinc-700 dark:text-zinc-300">{name}</span>
+                    </label>
+                  );
+                })}
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (selectedSheetNames.length === sheetOptions.length) {
+                    setSelectedSheetNames([]);
+                  } else {
+                    setSelectedSheetNames([...sheetOptions]);
+                  }
+                }}
+                className="w-fit rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-xs text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800"
               >
-                <option value="">All sheets</option>
-                {sheetOptions.map((name) => (
-                  <option key={name} value={name}>
-                    {name}
-                  </option>
-                ))}
-              </select>
+                {selectedSheetNames.length === sheetOptions.length ? "Deselect all" : "Select all"}
+              </button>
             </label>
           )}
 

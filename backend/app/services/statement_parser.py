@@ -60,7 +60,7 @@ def list_candidate_sheets(filename: str, content: bytes) -> SheetCandidates:
     return SheetCandidates(included=included, ignored=ignored)
 
 
-def parse_statement_file(filename: str, content: bytes, sheet_name: str | None = None) -> list[dict]:
+def parse_statement_file(filename: str, content: bytes, sheet_name: str | None = None, sheet_names: list[str] | None = None) -> list[dict]:
     """Parse an uploaded bank statement file into the same row-shape used
     when reading from the Google Sheet (same column names), so it can feed
     the same classify/route/write pipeline unchanged.
@@ -69,6 +69,11 @@ def parse_statement_file(filename: str, content: bytes, sheet_name: str | None =
     or a copy of the full multi-account workbook (one tab per bank account,
     with a summary row above the real header). Either is handled by scanning
     for the header row within each sheet, rather than assuming row 0.
+
+    `sheet_names` lets the caller pick specific tabs to parse (multi-select
+    mode); each row is tagged with the actual tab name it came from. When
+    neither `sheet_name` nor `sheet_names` is given, every matching tab is
+    processed together.
     """
     is_csv = filename.lower().endswith(".csv")
 
@@ -91,6 +96,21 @@ def parse_statement_file(filename: str, content: bytes, sheet_name: str | None =
                 raise ValueError(f"Sheet '{resolved_name}' is missing required columns: {', '.join(REQUIRED_COLUMNS)}")
             df = _apply_header(sheets[resolved_name], header_row)
             df["source_sheet"] = resolved_name
+        elif sheet_names:
+            frames: list[pd.DataFrame] = []
+            available = list(sheets.keys())
+            for requested in sheet_names:
+                resolved_name = _resolve_sheet_name(requested, available)
+                if resolved_name is None:
+                    raise ValueError(f"Sheet '{requested}' not found in uploaded file. Available sheets: {', '.join(available)}")
+                raw = sheets[resolved_name]
+                header_row = _find_header_row(raw)
+                if header_row is None:
+                    raise ValueError(f"Sheet '{resolved_name}' is missing required columns: {', '.join(REQUIRED_COLUMNS)}")
+                sheet_df = _apply_header(raw, header_row)
+                sheet_df["source_sheet"] = resolved_name
+                frames.append(sheet_df)
+            df = pd.concat(frames, ignore_index=True)
         else:
             matches: dict[str, pd.DataFrame] = {}
             for name, raw in sheets.items():
@@ -111,8 +131,10 @@ def parse_statement_file(filename: str, content: bytes, sheet_name: str | None =
                 pass
             df = pd.concat(matches.values(), ignore_index=True)
             df["source_sheet"] = ""
+            offset = 0
             for name, matched in matches.items():
-                df.loc[: len(matched) - 1, "source_sheet"] = name
+                df.loc[offset:offset + len(matched) - 1, "source_sheet"] = name
+                offset += len(matched)
 
     df = df.fillna("")
     records = df.to_dict(orient="records")

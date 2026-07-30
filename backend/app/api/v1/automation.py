@@ -71,11 +71,14 @@ async def run_automation_upload(
     dry_run: bool = True,
     file: UploadFile = File(...),
     sheet_name: str | None = Form(default=None),
+    sheet_names: list[str] | None = Form(default=None),
 ) -> RunResponse:
     content = await file.read()
 
     try:
-        rows = statement_parser.parse_statement_file(file.filename or "", content, sheet_name=sheet_name or None)
+        rows = statement_parser.parse_statement_file(
+            file.filename or "", content, sheet_name=sheet_name or None, sheet_names=sheet_names
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -94,11 +97,14 @@ async def run_automation_upload_stream(
     dry_run: bool = True,
     file: UploadFile = File(...),
     sheet_name: str | None = Form(default=None),
+    sheet_names: list[str] | None = Form(default=None),
 ) -> StreamingResponse:
     content = await file.read()
 
     try:
-        rows = statement_parser.parse_statement_file(file.filename or "", content, sheet_name=sheet_name or None)
+        rows = statement_parser.parse_statement_file(
+            file.filename or "", content, sheet_name=sheet_name or None, sheet_names=sheet_names
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

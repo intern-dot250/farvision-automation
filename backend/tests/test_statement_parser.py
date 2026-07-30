@@ -273,3 +273,156 @@ def test_list_candidate_sheets_empty_for_csv():
 
     assert result.included == []
     assert result.ignored == []
+
+
+def test_sheet_names_selects_specific_tabs():
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer) as writer:
+        pd.DataFrame([
+            {
+                "SL#": "1",
+                "TXN DATE": "22-Jul-2026",
+                "DESCRIPTION": "YIB-NEFT-REF1-Payee1-SBIN0007204-Contractor-STATE BANK OF INDIA",
+                "REFERENCE": "REF1",
+                "DEBITS": "1000",
+                "CREDITS": "",
+            }
+        ]).to_excel(writer, sheet_name="YES Rera 0377", index=False)
+        pd.DataFrame([
+            {
+                "SL#": "1",
+                "TXN DATE": "22-Jul-2026",
+                "DESCRIPTION": "YIB-NEFT-REF2-Payee2-SBIN0007204-Contractor-STATE BANK OF INDIA",
+                "REFERENCE": "REF2",
+                "DEBITS": "500",
+                "CREDITS": "",
+            }
+        ]).to_excel(writer, sheet_name="YES IDW 0490", index=False)
+
+    rows = parse_statement_file("multi.xlsx", buffer.getvalue(), sheet_names=["YES Rera 0377"])
+
+    assert len(rows) == 1
+    assert rows[0]["REFERENCE"] == "REF1"
+
+
+def test_sheet_names_selects_multiple_tabs():
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer) as writer:
+        pd.DataFrame([
+            {
+                "SL#": "1",
+                "TXN DATE": "22-Jul-2026",
+                "DESCRIPTION": "YIB-NEFT-REF1-Payee1-SBIN0007204-Contractor-STATE BANK OF INDIA",
+                "REFERENCE": "REF1",
+                "DEBITS": "1000",
+                "CREDITS": "",
+            }
+        ]).to_excel(writer, sheet_name="YES Rera 0377", index=False)
+        pd.DataFrame([
+            {
+                "SL#": "1",
+                "TXN DATE": "22-Jul-2026",
+                "DESCRIPTION": "YIB-NEFT-REF2-Payee2-SBIN0007204-Contractor-STATE BANK OF INDIA",
+                "REFERENCE": "REF2",
+                "DEBITS": "500",
+                "CREDITS": "",
+            }
+        ]).to_excel(writer, sheet_name="YES IDW 0490", index=False)
+        pd.DataFrame([{"no": "data"}]).to_excel(writer, sheet_name="Dashboard", index=False)
+
+    rows = parse_statement_file("multi.xlsx", buffer.getvalue(), sheet_names=["YES Rera 0377", "YES IDW 0490"])
+
+    assert len(rows) == 2
+    assert rows[0]["REFERENCE"] == "REF1"
+    assert rows[1]["REFERENCE"] == "REF2"
+
+
+def test_sheet_names_tags_source_sheet_correctly():
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer) as writer:
+        pd.DataFrame([
+            {
+                "SL#": "1",
+                "TXN DATE": "22-Jul-2026",
+                "DESCRIPTION": "YIB-NEFT-REF1-Payee1-SBIN0007204-Contractor-STATE BANK OF INDIA",
+                "REFERENCE": "REF1",
+                "DEBITS": "1000",
+                "CREDITS": "",
+            }
+        ]).to_excel(writer, sheet_name="YES Rera 0377", index=False)
+        pd.DataFrame([
+            {
+                "SL#": "1",
+                "TXN DATE": "22-Jul-2026",
+                "DESCRIPTION": "YIB-NEFT-REF2-Payee2-SBIN0007204-Contractor-STATE BANK OF INDIA",
+                "REFERENCE": "REF2",
+                "DEBITS": "500",
+                "CREDITS": "",
+            }
+        ]).to_excel(writer, sheet_name="YES IDW 0490", index=False)
+
+    rows = parse_statement_file("multi.xlsx", buffer.getvalue(), sheet_names=["YES IDW 0490", "YES Rera 0377"])
+
+    assert len(rows) == 2
+    assert rows[0]["source_sheet"] == "YES IDW 0490"
+    assert rows[1]["source_sheet"] == "YES Rera 0377"
+
+
+def test_sheet_names_is_case_and_whitespace_insensitive():
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer) as writer:
+        pd.DataFrame([
+            {
+                "SL#": "1",
+                "TXN DATE": "22-Jul-2026",
+                "DESCRIPTION": "YIB-NEFT-REF1-Payee1-SBIN0007204-Contractor-STATE BANK OF INDIA",
+                "REFERENCE": "REF1",
+                "DEBITS": "1000",
+                "CREDITS": "",
+            }
+        ]).to_excel(writer, sheet_name="YES Rera 0377", index=False)
+
+    rows = parse_statement_file("multi.xlsx", buffer.getvalue(), sheet_names=["  yes  rera  0377  "])
+
+    assert len(rows) == 1
+    assert rows[0]["source_sheet"] == "YES Rera 0377"
+
+
+def test_sheet_names_unknown_tab_raises_value_error():
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer) as writer:
+        pd.DataFrame([{"SL#": "1", "TXN DATE": "x", "DESCRIPTION": "x", "REFERENCE": "REF1", "DEBITS": "", "CREDITS": ""}]).to_excel(
+            writer, sheet_name="YES Rera 0377", index=False
+        )
+
+    with pytest.raises(ValueError, match="not found in uploaded file"):
+        parse_statement_file("multi.xlsx", buffer.getvalue(), sheet_names=["Nonexistent Tab"])
+
+
+def test_sheet_names_empty_list_is_treated_as_no_filter():
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer) as writer:
+        pd.DataFrame([
+            {
+                "SL#": "1",
+                "TXN DATE": "22-Jul-2026",
+                "DESCRIPTION": "YIB-NEFT-REF1-Payee1-SBIN0007204-Contractor-STATE BANK OF INDIA",
+                "REFERENCE": "REF1",
+                "DEBITS": "1000",
+                "CREDITS": "",
+            }
+        ]).to_excel(writer, sheet_name="YES Rera 0377", index=False)
+        pd.DataFrame([
+            {
+                "SL#": "1",
+                "TXN DATE": "22-Jul-2026",
+                "DESCRIPTION": "YIB-NEFT-REF2-Payee2-SBIN0007204-Contractor-STATE BANK OF INDIA",
+                "REFERENCE": "REF2",
+                "DEBITS": "500",
+                "CREDITS": "",
+            }
+        ]).to_excel(writer, sheet_name="YES IDW 0490", index=False)
+
+    rows = parse_statement_file("multi.xlsx", buffer.getvalue(), sheet_names=[])
+
+    assert len(rows) == 2
