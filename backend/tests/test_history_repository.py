@@ -41,6 +41,28 @@ def test_list_runs_merges_started_and_completed_rows():
     assert run["needs_review"] == 1
 
 
+def test_list_runs_extracts_sheet_names_from_started_context():
+    mock_response = MagicMock()
+    mock_response.data = [
+        {
+            "run_id": "run-1",
+            "message": "Automation run started",
+            "created_at": "2026-07-25T10:00:00Z",
+            "context": {"dry_run": False, "sheet_names": ["YES AH IDW 2457", "YES IDW 0490"]},
+        },
+    ]
+
+    mock_client = MagicMock()
+    mock_client.table.return_value.select.return_value.in_.return_value.order.return_value.execute.return_value = (
+        mock_response
+    )
+
+    with patch("app.services.history_repository.supabase_client.get_client", return_value=mock_client):
+        runs = history_repository.list_runs()
+
+    assert runs[0]["sheet_names"] == ["YES AH IDW 2457", "YES IDW 0490"]
+
+
 def test_get_stats_reads_directly_from_google_sheets():
     def fake_count_data_rows(sheet_id, worksheet_name):
         return {"ReceiptPayment": 11, "DepositWithdrawal": 3}[worksheet_name]

@@ -448,6 +448,13 @@ def _write_transactions(transactions: list[TransactionRowSet], settings, run_id:
     # no separate ledger to update here.
 
 
+def _distinct_sheet_names(bank_rows: list[dict]) -> list[str]:
+    """Source tab name(s) actually used by a run (an upload with no sheet
+    chosen can span several) - empty for runs against the plain configured
+    Google Sheet, which has no per-row "source_sheet" tag."""
+    return sorted({row["source_sheet"] for row in bank_rows if row.get("source_sheet")})
+
+
 def run_automation_stream(dry_run: bool = True, rows: list[dict] | None = None):
     """Same pipeline as run_automation(), but yields live progress events so
     a caller (e.g. a streaming API response) can report real progress
@@ -461,14 +468,16 @@ def run_automation_stream(dry_run: bool = True, rows: list[dict] | None = None):
     run_id = str(uuid.uuid4())
     settings = get_settings()
 
+    bank_rows = rows if rows is not None else _read_bank_rows_from_sheet()
+    total = len(bank_rows)
+    sheet_names = _distinct_sheet_names(bank_rows)
+
     logger.info(f"[{run_id}] Automation run started (dry_run={dry_run}, source={'upload' if rows is not None else 'sheet'})")
     ledger_repository.log_audit(
         run_id, "info", "Automation run started",
-        {"dry_run": dry_run, "source": "upload" if rows is not None else "sheet"},
+        {"dry_run": dry_run, "source": "upload" if rows is not None else "sheet", "sheet_names": sheet_names},
     )
 
-    bank_rows = rows if rows is not None else _read_bank_rows_from_sheet()
-    total = len(bank_rows)
     yield {"type": "progress", "stage": "classifying", "processed": 0, "total": total}
 
     gen = _process_rows_stream(bank_rows, run_id, settings)

@@ -47,6 +47,7 @@ export default function HistoryPage() {
                 <tr>
                   <th className="px-3 py-2 font-medium">Started</th>
                   <th className="px-3 py-2 font-medium">Mode</th>
+                  <th className="px-3 py-2 font-medium">Sheet</th>
                   <th className="px-3 py-2 font-medium">Receipt/Payment</th>
                   <th className="px-3 py-2 font-medium">Deposit/Withdrawal</th>
                   <th className="px-3 py-2 font-medium">Review</th>
@@ -65,6 +66,11 @@ export default function HistoryPage() {
                       <Badge tone={run.dry_run ? "warning" : "success"}>
                         {run.dry_run ? "Dry run" : "Written"}
                       </Badge>
+                    </td>
+                    <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">
+                      {run.sheet_names && run.sheet_names.length > 0
+                        ? run.sheet_names.join(", ")
+                        : "—"}
                     </td>
                     <td className="px-3 py-2">
                       {run.routed_receipt_payment ?? "—"}

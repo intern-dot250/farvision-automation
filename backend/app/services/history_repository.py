@@ -25,6 +25,7 @@ def list_runs(limit: int = 20) -> list[dict[str, Any]]:
         if row["message"] == "Automation run started":
             run["started_at"] = row["created_at"]
             run["dry_run"] = context.get("dry_run")
+            run["sheet_names"] = context.get("sheet_names")
         else:
             run["completed_at"] = row["created_at"]
             run["routed_receipt_payment"] = context.get("routed_receipt_payment")

@@ -6,6 +6,7 @@ from app.services.automation_engine import (
     TransactionRowSet,
     _build_deposit_withdrawal_rows,
     _build_receipt_payment_rows,
+    _distinct_sheet_names,
     _format_amount,
     _normalize_business_unit,
     _process_rows,
@@ -47,6 +48,20 @@ def test_normalize_business_unit_leaves_others_unchanged():
     assert _normalize_business_unit("Casa Romana") == "Casa Romana"
     assert _normalize_business_unit("Aravali Heights") == "Aravali Heights"
     assert _normalize_business_unit("") == ""
+
+
+def test_distinct_sheet_names_deduplicates_and_sorts():
+    bank_rows = [
+        {"source_sheet": "YES IDW 0490"},
+        {"source_sheet": "YES AH IDW 2457"},
+        {"source_sheet": "YES IDW 0490"},
+    ]
+    assert _distinct_sheet_names(bank_rows) == ["YES AH IDW 2457", "YES IDW 0490"]
+
+
+def test_distinct_sheet_names_empty_for_plain_sheet_rows():
+    bank_rows = [{"SL#": "1"}, {"SL#": "2", "source_sheet": ""}]
+    assert _distinct_sheet_names(bank_rows) == []
 
 
 def _internal_txn(

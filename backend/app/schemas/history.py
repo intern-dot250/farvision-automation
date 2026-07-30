@@ -8,6 +8,7 @@ class RunSummary(BaseModel):
     started_at: datetime | None = None
     completed_at: datetime | None = None
     dry_run: bool | None = None
+    sheet_names: list[str] | None = None
     routed_receipt_payment: int | None = None
     routed_deposit_withdrawal: int | None = None
     needs_review: int | None = None

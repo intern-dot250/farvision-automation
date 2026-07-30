@@ -5,6 +5,7 @@ export type RunSummary = {
   started_at: string | null;
   completed_at: string | null;
   dry_run: boolean | null;
+  sheet_names: string[] | null;
   routed_receipt_payment: number | null;
   routed_deposit_withdrawal: number | null;
   needs_review: number | null;
