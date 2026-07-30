@@ -56,7 +56,6 @@ export default function DashboardPage() {
     setResult(null);
     setRunError(null);
     setSheetOptions([]);
-    setSheetName("");
     setSelectedSheetNames([]);
     setTotalSheets(0);
     setIgnoredSheets([]);
