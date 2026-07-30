@@ -72,7 +72,6 @@ export default function DashboardPage() {
         setTotalSheets(data.total_sheets);
         setIgnoredSheets(data.ignored_sheets);
         if (data.sheets.length === 1) {
-          setSheetName(data.sheets[0]);
           setSelectedSheetNames(data.sheets.slice(0, 1));
         } else {
           setSelectedSheetNames(data.sheets.slice(0, 1));
