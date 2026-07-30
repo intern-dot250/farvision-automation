@@ -12,28 +12,28 @@ from app.services.automation_engine import (
 from app.services.classifier import ClassificationResult
 
 
-def test_format_amount_indian_grouping_under_one_lakh():
-    assert _format_amount(9900) == "9,900"
+def test_format_amount_returns_real_int():
+    result = _format_amount(9900)
+    assert result == 9900
+    assert isinstance(result, int)
 
 
-def test_format_amount_indian_grouping_one_lakh():
-    assert _format_amount(150000) == "1,50,000"
-
-
-def test_format_amount_indian_grouping_crore():
-    assert _format_amount(12345678) == "1,23,45,678"
+def test_format_amount_large_value_stays_int():
+    assert _format_amount(12345678) == 12345678
 
 
 def test_format_amount_drops_decimals():
-    assert _format_amount(44840.75) == "44,841"
+    result = _format_amount(44840.75)
+    assert result == 44841
+    assert isinstance(result, int)
 
 
 def test_format_amount_zero_is_blank():
     assert _format_amount(0) == ""
 
 
-def test_format_amount_small_number_no_grouping():
-    assert _format_amount(500) == "500"
+def test_format_amount_small_number():
+    assert _format_amount(500) == 500
 
 
 def _internal_txn(

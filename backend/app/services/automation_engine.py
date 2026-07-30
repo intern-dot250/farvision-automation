@@ -33,28 +33,17 @@ def _parse_txn_date(value: str) -> datetime:
     raise ValueError(f"time data {value!r} does not match any known TXN DATE format")
 
 
-def _format_amount(amount: float) -> str:
-    """Indian digit grouping (lakh/crore), whole rupees only - e.g.
-    150000 -> "1,50,000", not the Western "150,000.00"."""
-    if not amount:
-        return ""
-
-    sign = "-" if amount < 0 else ""
-    digits = str(int(round(abs(amount))))
-
-    if len(digits) <= 3:
-        return f"{sign}{digits}"
-
-    last_three = digits[-3:]
-    rest = digits[:-3]
-    groups = []
-    while len(rest) > 2:
-        groups.insert(0, rest[-2:])
-        rest = rest[:-2]
-    if rest:
-        groups.insert(0, rest)
-
-    return f"{sign}{','.join(groups)},{last_three}"
+def _format_amount(amount: float) -> int | str:
+    """Whole-rupee integer for a real, sortable/summable Sheets number, or
+    "" when there's nothing to show (Debit/Credit are mutually exclusive
+    per row). Indian digit grouping ("1,50,000") isn't achievable on a
+    genuine Sheets number - confirmed exhaustively (NUMBER/TEXT format
+    types, custom patterns, locale tags, en_GB, even India's own hi_IN
+    locale all only ever produce Western 3-digit grouping) - so display
+    grouping is handled by the column's own number format
+    (sheets_client._apply_amount_number_formats), not here.
+    """
+    return int(round(amount)) if amount else ""
 
 
 def _resolve_own_bank_name(source_sheet, matched_master, narration_bank) -> str:

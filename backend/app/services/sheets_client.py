@@ -145,32 +145,72 @@ def get_column_values(sheet_id: str, worksheet_name: str, column: str) -> set[st
     return {v.strip() for v in values if v.strip()}
 
 
+_AMOUNT_COLUMNS = {"Debit Amount", "Credit Amount", "Adjustment Amount"}
+
+# Tabs that get a Western-grouped, no-decimal NUMBER format applied to their
+# amount columns after every write - see _apply_amount_number_format().
+_AMOUNT_COLUMNS_BY_TAB: dict[str, list[str]] = {
+    "LedgerDetails": ["Debit Amount", "Credit Amount"],
+    "AdjustmentDetails": ["Adjustment Amount"],
+}
+
+
+def _column_letter(col_index: int) -> str:
+    """1-indexed column number -> spreadsheet column letter(s) (1 -> "A")."""
+    letters = ""
+    while col_index > 0:
+        col_index, remainder = divmod(col_index - 1, 26)
+        letters = chr(65 + remainder) + letters
+    return letters
+
+
+def _apply_amount_number_format(worksheet: gspread.Worksheet, header: list[str], worksheet_name: str) -> None:
+    """Applies a real, no-decimal NUMBER format ("#,##0") to this tab's
+    amount columns, for every data row (open-ended range) - not just the
+    rows just appended, so it also fixes any older rows in the same column.
+
+    Indian digit grouping ("1,50,000") isn't achievable on a genuine Sheets
+    number - confirmed exhaustively (NUMBER/TEXT format types, custom comma
+    patterns, locale tags, en_GB, even India's own hi_IN locale all only
+    ever produce Western 3-digit grouping ("150,000")) - so this is the best
+    available real-number formatting: right-aligned, sortable, usable in
+    SUM/formulas, whole rupees only.
+    """
+    columns = _AMOUNT_COLUMNS_BY_TAB.get(worksheet_name)
+    if not columns:
+        return
+    for column in columns:
+        if column not in header:
+            continue
+        letter = _column_letter(header.index(column) + 1)
+        worksheet.format(f"{letter}2:{letter}", {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}})
+
+
 def append_records(sheet_id: str, worksheet_name: str, records: list[dict]) -> None:
     """Append rows to a worksheet, ordering values to match its existing header row.
 
-    Numeric columns (Link Ref Code, Detail Link Ref Code) are written as integers
-    so Sheets right-aligns them. Date columns (Document Date, Invoice Date) are
-    written as plain "DD/MM/YYYY" strings - the same format they already arrive
-    in from automation_engine.py - so both columns stay consistent and never
-    get silently reformatted to ISO ("YYYY-MM-DD"). A plain string is always
+    Numeric columns (Link Ref Code, Detail Link Ref Code, Debit/Credit/
+    Adjustment Amount) are written as integers so Sheets treats them as real
+    numbers. Date columns (Document Date, Invoice Date) are written as plain
+    "DD/MM/YYYY" strings - the same format they already arrive in from
+    automation_engine.py - so both columns stay consistent and never get
+    silently reformatted to ISO ("YYYY-MM-DD"). A plain string is always
     JSON serializable, unlike a native `date` object (which previously broke
     real writes).
 
     Uses RAW input mode, not USER_ENTERED: Sheets' "smart parsing" under
-    USER_ENTERED inconsistently converts some Indian-grouped amount strings
-    (e.g. "10,395") into real numbers - inheriting that column's pre-existing
-    Western "#,##0.00" cell format and reintroducing decimals - while others
-    (e.g. "2,00,000") fail to parse and stay text, causing inconsistent
-    number/text alignment. RAW keeps every string exactly as given; integer
-    values (Link Ref Code) are unaffected either way, since they're sent as
-    real JSON numbers rather than strings.
+    USER_ENTERED inconsistently converts some comma-grouped strings into
+    real numbers while leaving others as literal text (locale-dependent),
+    causing inconsistent number/text alignment on the same column. RAW keeps
+    every string exactly as given; integer values are unaffected either way,
+    since they're sent as real JSON numbers rather than strings.
     """
     if not records:
         return
 
-    INT_COLUMNS = {"Link Ref Code", "Detail Link Ref Code"}
+    INT_COLUMNS = {"Link Ref Code", "Detail Link Ref Code"} | _AMOUNT_COLUMNS
 
-    def _coerce(value: str, column: str):
+    def _coerce(value, column: str):
         if column in INT_COLUMNS:
             try:
                 return int(value)
@@ -193,3 +233,4 @@ def append_records(sheet_id: str, worksheet_name: str, records: list[dict]) -> N
         for record in records
     ]
     worksheet.append_rows(rows, value_input_option="RAW")
+    _apply_amount_number_format(worksheet, header, worksheet_name)

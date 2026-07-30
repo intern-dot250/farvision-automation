@@ -34,6 +34,51 @@ def test_append_records_coerces_link_ref_code_to_int(monkeypatch):
     assert isinstance(rows[0][0], int)
 
 
+def test_column_letter():
+    assert sheets_client._column_letter(1) == "A"
+    assert sheets_client._column_letter(8) == "H"
+    assert sheets_client._column_letter(26) == "Z"
+    assert sheets_client._column_letter(27) == "AA"
+    assert sheets_client._column_letter(28) == "AB"
+
+
+def test_append_records_coerces_amount_columns_to_int(monkeypatch):
+    mock_ws = MagicMock()
+    mock_ws.row_values.return_value = ["Link Ref Code", "Debit Amount", "Credit Amount"]
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    sheets_client.append_records("sheet1", "LedgerDetails", [
+        {"Link Ref Code": "1", "Debit Amount": 150000, "Credit Amount": ""}
+    ])
+
+    rows = mock_ws.append_rows.call_args.args[0]
+    assert rows[0][1] == 150000
+    assert isinstance(rows[0][1], int)
+    assert rows[0][2] == ""
+
+
+def test_append_records_applies_number_format_to_amount_columns(monkeypatch):
+    mock_ws = MagicMock()
+    mock_ws.row_values.return_value = ["Link Ref Code", "Debit Amount", "Credit Amount"]
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    sheets_client.append_records("sheet1", "LedgerDetails", [
+        {"Link Ref Code": "1", "Debit Amount": 150000, "Credit Amount": ""}
+    ])
+
+    format_calls = {call.args[0]: call.args[1] for call in mock_ws.format.call_args_list}
+    assert format_calls["B2:B"] == {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}}
+    assert format_calls["C2:C"] == {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}}
+
+
+def test_append_records_skips_number_format_for_unrelated_tabs(monkeypatch):
+    mock_ws = _setup_mocks(monkeypatch)
+    sheets_client.append_records("sheet1", "Sheet1", [
+        {"Link Ref Code": "1", "Narration": "test"}
+    ])
+    mock_ws.format.assert_not_called()
+
+
 def test_append_records_uses_raw_input_mode(monkeypatch):
     # RAW (not USER_ENTERED) so Sheets never "smart parses" a comma-grouped
     # amount string into a number and reintroduces the column's inherited
