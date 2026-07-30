@@ -97,6 +97,21 @@ def test_existing_head_internal_still_looks_up_master_for_bank_name():
     assert result.payee_name == "DWARKADHIS PROJECTS PRIVATE LIMITED IN CIRP CR"
 
 
+def test_trusted_non_internal_head_wins_even_with_no_ifsc_narration():
+    # Regression: narrations with no IFSC ("POS GST", bank-charge style
+    # entries) previously got silently forced to "Internal" even when the
+    # file's own HEAD column explicitly said something else (e.g.
+    # "Bank Charges") - a trusted head must always win over the
+    # narration-shape heuristic, which is only for rows with no trusted
+    # head at all.
+    with patch("app.services.classifier.master_repository.find_party", return_value=None):
+        result = classify_transaction("POS GST", existing_head="Bank Charges")
+
+    assert result.is_internal is False
+    assert result.head == "Bank Charges"
+    assert result.needs_review is False
+
+
 def test_existing_head_with_no_master_match_still_routes_without_review():
     # A trusted, non-Internal head from the statement (Contractor/Vendor/...)
     # is enough on its own to route to Receipt/Payment - it shouldn't need

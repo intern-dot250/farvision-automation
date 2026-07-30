@@ -135,6 +135,21 @@ def test_ledger_details_parent_account_head_falls_back_to_trusted_head():
     assert rows["LedgerDetails"][0]["Parent Account Head"] == "Vendor"
 
 
+def test_ledger_details_account_head_and_payee_name_fall_back_to_head_when_no_payee_name():
+    # "POS GST"-style narrations (Bank Charges, etc.) have no extractable
+    # payee name and no Master match - Account Head/Payee Name must still
+    # fall back to the trusted head so LedgerDetails' required fields never
+    # end up blank and silently reroute the row to review.
+    txn = _receipt_payment_txn("Bank Charges", {})
+    txn.classification.payee_name = None
+    rows = _build_receipt_payment_rows(txn, link_ref_code=5)
+
+    ledger = rows["LedgerDetails"][0]
+    assert ledger["Account Head"] == "Bank Charges"
+    assert ledger["Parent Account Head"] == "Bank Charges"
+    assert ledger["Payee Name"] == "Bank Charges"
+
+
 def test_ledger_details_parent_account_head_prefers_master_when_present():
     txn = _receipt_payment_txn("Contractor", {"Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS"})
     rows = _build_receipt_payment_rows(txn, link_ref_code=4)

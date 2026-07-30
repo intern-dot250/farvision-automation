@@ -42,11 +42,19 @@ def classify_transaction(description: str, existing_head: str | None = None) -> 
     trusted_head = existing_head.strip() if existing_head else ""
 
     if trusted_head:
-        if trusted_head.upper() == "INTERNAL" or parsed.is_internal_format:
+        if trusted_head.upper() == "INTERNAL":
             # Internal transfers stay "Internal"/not-needing-review regardless
             # of whether Master has this counterparty - but still look it up,
             # so a real Bank Name (etc.) can be pulled from Master when it
             # does have an entry for them.
+            #
+            # Deliberately NOT also checking parsed.is_internal_format here:
+            # that's a narration-shape heuristic (no IFSC found) meant only
+            # for rows with no trusted head at all. A trusted head that says
+            # something other than "Internal" (e.g. "Bank Charges") must win
+            # even if the narration has no IFSC ("POS GST" never will) -
+            # otherwise every non-NEFT/RTGS narration gets silently
+            # relabelled "Internal" regardless of what the file actually says.
             internal_matched = master_repository.find_party(parsed.payee_name)
             return ClassificationResult(
                 is_internal=True,

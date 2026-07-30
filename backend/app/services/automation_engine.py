@@ -158,16 +158,18 @@ def _build_receipt_payment_rows(txn: TransactionRowSet, link_ref_code: int) -> d
                 "Business Unit": txn.business_unit,
                 "Document Type": "RECEIPT / PAYMENT",
                 "Debit/Credit": debit_credit,
-                "Account Head": matched.get("Account Head") or txn.classification.payee_name,
-                # Falls back to the trusted head (Vendor/Contractor/...) when
-                # Master has no entry for this payee, so an unmatched-but-
-                # headed transaction never fails the LedgerDetails required-
-                # field check and gets wrongly rerouted to review.
+                # Both fall back to the trusted head (Vendor/Contractor/Bank
+                # Charges/...) as a last resort when Master has no entry for
+                # this payee AND the narration has no extractable payee name
+                # (e.g. "POS GST") - so a headed transaction never fails the
+                # LedgerDetails required-field check and gets wrongly
+                # rerouted to review just because neither source has a name.
+                "Account Head": matched.get("Account Head") or txn.classification.payee_name or txn.classification.head,
                 "Parent Account Head": matched.get("Parent Account Head") or txn.classification.head,
                 "Debit Amount": _format_amount(txn.debit),
                 "Credit Amount": _format_amount(txn.credit),
                 "Payment Mode": "Net Banking",
-                "Payee Name": txn.classification.payee_name,
+                "Payee Name": txn.classification.payee_name or txn.classification.head,
             }
         ],
         "AdjustmentDetails": [
