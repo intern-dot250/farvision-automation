@@ -202,9 +202,18 @@ export default function DashboardPage() {
                   : " — all used"}
               </span>
               {ignoredSheets.length > 0 && (
-                <span className="text-xs text-zinc-500 dark:text-zinc-500">
-                  Ignored: {ignoredSheets.join(", ")}
-                </span>
+                <select
+                  multiple
+                  size={Math.min(ignoredSheets.length, 6)}
+                  className="mt-1 w-full rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400"
+                  disabled
+                >
+                  {ignoredSheets.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
               )}
             </div>
           )}
