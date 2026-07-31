@@ -115,13 +115,17 @@ class RunResult:
 
 def _build_import_tax_info_rows(txn: TransactionRowSet, link_ref_code: int, matched: dict) -> list[dict]:
     """Contractor payments always need both a TDS row and a GST row on the
-    same Link Ref Code; Vendor payments only need the GST row. Any other
-    head keeps the original single Master-driven row.
+    same Link Ref Code; Vendor payments only need the GST row. Only these two
+    heads need ImportTaxInfo rows at all - other heads (Collection, Imprest,
+    ...) never had TDS/GST requirements, so they don't need a Master
+    Description and must not be blocked in Review for lacking one.
 
     Only emits rows when the matched Master row has a non-empty Description.
     Returns an empty list when Description is missing — the caller in
     _assign_rows will then reroute the transaction to Review instead of
     writing a half-complete row."""
+    if txn.classification.head not in ("Contractor", "Vendor"):
+        return []
     description = matched.get("Description", "")
     if not description:
         return []
@@ -132,9 +136,7 @@ def _build_import_tax_info_rows(txn: TransactionRowSet, link_ref_code: int, matc
             {**base, "Deduction Type": "Tax deducted at source", "Description": description},
             {**base, "Deduction Type": "Goods and Service Tax", "Description": description},
         ]
-    if txn.classification.head == "Vendor":
-        return [{**base, "Deduction Type": "Goods and Service Tax", "Description": description}]
-    return [{**base, "Deduction Type": matched.get("Deduction Type", ""), "Description": description}]
+    return [{**base, "Deduction Type": "Goods and Service Tax", "Description": description}]
 
 
 def _build_receipt_payment_rows(txn: TransactionRowSet, link_ref_code: int) -> dict[str, list[dict]]:
@@ -418,14 +420,17 @@ def _assign_rows(transactions: list[TransactionRowSet], settings, run_id: str) -
             continue
 
         # ImportTaxInfo rows require a non-empty Description when the
-        # matched Master row exists (Contractor/Vendor need TDS/GST rows).
-        # Only route to Review when there IS a Master match but it lacks
-        # Description — not when there's no Master match at all, because
-        # a trusted head (Vendor/Contractor/Imprest/etc.) plus the bank
-        # narration is sufficient to build valid Receipt/Payment rows.
+        # matched Master row exists, but only for Contractor/Vendor heads
+        # (they need TDS/GST rows) - other heads (Collection, Imprest, ...)
+        # never needed a Description and must not be blocked in Review for
+        # lacking one. Also don't route to Review when there's no Master
+        # match at all, because a trusted head (Vendor/Contractor/Imprest/
+        # etc.) plus the bank narration is sufficient to build valid
+        # Receipt/Payment rows.
         matched = txn.classification.matched_master_row
         if (
             txn.destination == "receipt_payment"
+            and txn.classification.head in ("Contractor", "Vendor")
             and not rows.get("ImportTaxInfo")
             and matched is not None
             and not matched.get("Description")

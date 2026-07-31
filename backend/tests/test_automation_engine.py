@@ -233,17 +233,18 @@ def test_receipt_payment_bank_name_blank_when_master_and_narration_have_none():
     assert rows["ReceiptPayment"][0]["BankName"] == ""
 
 
-def test_other_head_keeps_original_master_driven_single_row():
+def test_other_head_never_emits_import_tax_info_rows_even_with_description():
+    # Only Contractor/Vendor need TDS/GST ImportTaxInfo rows - every other
+    # head (Collection, Imprest, "SUNDRY CREDITORS - OTHER", ...) skips
+    # ImportTaxInfo entirely, even when Master happens to have a Description,
+    # so they're never blocked in Review over it either.
     txn = _receipt_payment_txn(
         "SUNDRY CREDITORS - OTHER",
         {"Deduction Type": "Something Else", "Description": "Some description"},
     )
     rows = _build_receipt_payment_rows(txn, link_ref_code=5)
 
-    tax_rows = rows["ImportTaxInfo"]
-    assert len(tax_rows) == 1
-    assert tax_rows[0]["Deduction Type"] == "Something Else"
-    assert tax_rows[0]["Description"] == "Some description"
+    assert rows["ImportTaxInfo"] == []
 
 
 def test_contractor_with_empty_description_emits_no_import_tax_info_rows():
@@ -272,6 +273,41 @@ def test_other_head_with_empty_description_emits_no_import_tax_info_rows():
     rows = _build_receipt_payment_rows(txn, link_ref_code=10)
 
     assert rows["ImportTaxInfo"] == []
+
+
+def test_collection_head_with_master_match_and_blank_description_routes_to_receipt_payment():
+    # Regression for the bug where a Master match with blank Description
+    # blocked ANY head in Review, not just Contractor/Vendor - Collection
+    # (and any other non-Contractor/Vendor head) must route straight to
+    # Receipt/Payment even when Master has no Description for the payee.
+    bank_rows = [
+        {
+            "SL#": "165",
+            "REFERENCE": "REF-COLLECTION-2",
+            "DESCRIPTION": "IMPS/AMITKUMAR/XXX3986/RRN:618712584961/AXIS BANK",
+            "TXN DATE": "06-Jul-2026",
+            "DEBITS": "",
+            "CREDITS": "5000",
+            "BUSINESS UNIT": "Casa Romana",
+            "HEAD": "Collection",
+            "source_sheet": "YES Master 0264",
+        }
+    ]
+
+    with patch(
+        "app.services.automation_engine.sheets_client.get_column_values",
+        return_value=set(),
+    ), patch(
+        "app.services.automation_engine.classifier.master_repository.find_party",
+        return_value={"Account Head": "AMITKUMAR", "Parent Account Head": "SUNDRY DEBTORS"},
+    ):
+        transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
+
+    assert len(transactions) == 1
+    txn = transactions[0]
+    assert txn.classification.head == "Collection"
+    assert txn.destination == "receipt_payment"
+    assert txn.review_reason is None
 
 
 class _FakeSettings:
