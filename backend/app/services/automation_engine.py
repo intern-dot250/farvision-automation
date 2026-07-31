@@ -417,11 +417,19 @@ def _assign_rows(transactions: list[TransactionRowSet], settings, run_id: str) -
             txn.review_reason = "; ".join(errors)
             continue
 
-        # ImportTaxInfo rows require a non-empty Description, which is
-        # enforced by _build_import_tax_info_rows returning an empty list
-        # when the matched Master row has no Description. Route those to
-        # Review rather than writing half-complete rows to Sheets.
-        if txn.destination == "receipt_payment" and not rows.get("ImportTaxInfo"):
+        # ImportTaxInfo rows require a non-empty Description when the
+        # matched Master row exists (Contractor/Vendor need TDS/GST rows).
+        # Only route to Review when there IS a Master match but it lacks
+        # Description — not when there's no Master match at all, because
+        # a trusted head (Vendor/Contractor/Imprest/etc.) plus the bank
+        # narration is sufficient to build valid Receipt/Payment rows.
+        matched = txn.classification.matched_master_row
+        if (
+            txn.destination == "receipt_payment"
+            and not rows.get("ImportTaxInfo")
+            and matched is not None
+            and not matched.get("Description")
+        ):
             logger.warning(f"[{run_id}] SL#{txn.sl_no} ImportTaxInfo.Description is required but empty")
             ledger_repository.log_audit(
                 run_id, "error",
