@@ -206,7 +206,6 @@ def _build_receipt_payment_rows(txn: TransactionRowSet, link_ref_code: int) -> d
                 "Narration": txn.description,
                 "BankName": bank_name,
                 "EntryTypes": "RECEIPT / PAYMENT",
-                "Reference": txn.reference,
             }
         ],
         "ReceiptPaymentDetail": [
@@ -275,7 +274,6 @@ def _build_deposit_withdrawal_rows(txn: TransactionRowSet, link_ref_code: int) -
                 "Document No": "",
                 "BankName": bank_name,
                 "EntryTypes": "Deposit / Withdrawal",
-                "Reference": txn.reference,
             }
         ],
         "DepositWithdrawalDetails": [{"Link Ref Code": link_ref_code}],
@@ -310,12 +308,17 @@ def _process_rows_stream(bank_rows: list[dict], run_id: str, settings):
     streaming API response) can report live progress; returns the full
     transactions list as the generator's return value.
     """
-    # Duplicate check reads the Reference column directly from both real
+    # Duplicate check reads the Narration column directly from both real
     # Sheets - the Sheet is the single source of truth. A separate ledger
     # (e.g. Supabase) can silently drift from what's actually in the Sheet
     # (deleted rows, failed partial writes); reading the Sheet itself can't.
-    rp_refs = sheets_client.get_column_values(settings.RECEIPT_PAYMENT_SHEET_ID, "ReceiptPayment", "Reference")
-    dw_refs = sheets_client.get_column_values(settings.DEPOSIT_WITHDRAWAL_SHEET_ID, "DepositWithdrawal", "Reference")
+    # Narration (not a dedicated Reference column - Farvision's format has
+    # no room for one) already carries the bank's own reference/UTR embedded
+    # in the text, so it's just as reliable a duplicate key.
+    rp_narrations = sheets_client.get_column_values(settings.RECEIPT_PAYMENT_SHEET_ID, "ReceiptPayment", "Narration")
+    dw_narrations = sheets_client.get_column_values(
+        settings.DEPOSIT_WITHDRAWAL_SHEET_ID, "DepositWithdrawal", "DepositWithdrawal Narration"
+    )
 
     total = len(bank_rows)
     transactions = []
@@ -341,12 +344,12 @@ def _process_rows_stream(bank_rows: list[dict], run_id: str, settings):
                 description, existing_head=existing_head, is_credit=credit > 0
             )
 
-            if reference and (reference in rp_refs or reference in dw_refs):
-                logger.info(f"[{run_id}] Skipping duplicate SL#{sl_no} (reference={reference})")
+            if description and (description in rp_narrations or description in dw_narrations):
+                logger.info(f"[{run_id}] Skipping duplicate SL#{sl_no} (narration={description})")
                 ledger_repository.log_audit(
                     run_id, "info", f"Skipped duplicate SL#{sl_no}", {"reference": reference}
                 )
-                original_dest = "receipt_payment" if reference in rp_refs else "deposit_withdrawal"
+                original_dest = "receipt_payment" if description in rp_narrations else "deposit_withdrawal"
                 transactions.append(
                     TransactionRowSet(
                         sl_no=sl_no,

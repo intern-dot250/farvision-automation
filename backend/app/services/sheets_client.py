@@ -21,7 +21,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[2]
 _RECEIPT_PAYMENT_HEADERS: dict[str, list[str]] = {
     "ReceiptPayment": [
         "Link Ref Code", "Business Unit", "Financial Year", "Document Type",
-        "Document Date", "Document No", "Narration", "BankName", "EntryTypes", "Reference",
+        "Document Date", "Document No", "Narration", "BankName", "EntryTypes",
     ],
     "ReceiptPaymentDetail": ["Link Ref Code", "Detail Link Ref Code"],
     "LedgerDetails": [
@@ -44,7 +44,7 @@ _DEPOSIT_WITHDRAWAL_HEADERS: dict[str, list[str]] = {
     "DepositWithdrawal": [
         "Link Ref Code", "DepositWithdrawal Business Unit", "DepositWithdrawal Narration",
         "Financial Year", "Document Type", "Document Date", "Document No",
-        "BankName", "EntryTypes", "Reference",
+        "BankName", "EntryTypes",
     ],
     "DepositWithdrawalDetails": ["Link Ref Code"],
     "LedgerDetails": [

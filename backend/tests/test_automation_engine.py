@@ -392,13 +392,17 @@ class _FakeSettings:
 
 
 def test_duplicate_transaction_is_detected_directly_from_the_sheet():
-    # Duplicate-detection reads the Reference column straight from the real
-    # Sheet, not a separate ledger that could drift out of sync with it.
+    # Duplicate-detection reads the Narration column straight from the real
+    # Sheet (not a dedicated Reference column - Farvision's format has no
+    # room for one, and Narration already carries the bank's own
+    # reference/UTR embedded in the text), not a separate ledger that could
+    # drift out of sync with it.
+    narration = "YIB-NEFT-YESME6203001855300-Rakiba BIBI-SBIN0007204-Contractor-STATE BANK OF INDIA"
     bank_rows = [
         {
             "SL#": "336",
             "REFERENCE": "YESME6203001855300",
-            "DESCRIPTION": "YIB-NEFT-YESME6203001855300-Rakiba BIBI-SBIN0007204-Contractor-STATE BANK OF INDIA",
+            "DESCRIPTION": narration,
             "TXN DATE": "22-Jul-2026",
             "DEBITS": "1000",
             "CREDITS": "",
@@ -409,7 +413,7 @@ def test_duplicate_transaction_is_detected_directly_from_the_sheet():
 
     def fake_get_column_values(sheet_id, worksheet_name, column):
         if worksheet_name == "ReceiptPayment":
-            return {"YESME6203001855300"}
+            return {narration}
         return set()
 
     with patch(
