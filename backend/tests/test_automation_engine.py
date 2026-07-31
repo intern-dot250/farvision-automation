@@ -283,6 +283,27 @@ def test_other_head_with_no_master_match_still_emits_blank_import_tax_info_row()
     assert tax_rows[0]["Description"] == ""
 
 
+def test_contractor_with_blank_description_falls_back_to_same_category_description():
+    # When the payee's own Master row has no Description, reuse the
+    # Description from another Master row sharing the same Account
+    # Head/Parent Account Head (master_repository.find_description_for_head).
+    txn = _receipt_payment_txn(
+        "Contractor",
+        {"Account Head": "NAVEEN YADAV", "Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS"},
+    )
+
+    with patch(
+        "app.services.automation_engine.master_repository.find_description_for_head",
+        return_value="TDS ON CONTRACTORS",
+    ) as mock_fallback:
+        rows = _build_receipt_payment_rows(txn, link_ref_code=11)
+
+    mock_fallback.assert_called_once_with("NAVEEN YADAV", "SUNDRY CREDITORS - CONTRACTORS")
+    tax_rows = rows["ImportTaxInfo"]
+    assert tax_rows[0]["Description"] == "TDS ON CONTRACTORS"
+    assert tax_rows[1]["Description"] == "TDS ON CONTRACTORS"
+
+
 def test_collection_head_with_master_match_and_blank_description_routes_to_receipt_payment():
     # Regression for the bug where a Master match with blank Description
     # blocked ANY head in Review, not just Contractor/Vendor - Collection

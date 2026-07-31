@@ -119,10 +119,16 @@ def _build_import_tax_info_rows(txn: TransactionRowSet, link_ref_code: int, matc
     Contractor payments get both a TDS row and a GST row; Vendor payments
     get only the GST row; every other head keeps a single Master-driven row.
     Deduction Type/Description come from the matched Master row when
-    available and are left blank otherwise - a missing Master match or
-    Description no longer suppresses the row."""
+    available. When the payee's own Master row has no Description, fall
+    back to another Master row sharing the same Account Head/Parent Account
+    Head that does (master_repository.find_description_for_head) - many
+    payees under the same category (e.g. "SUNDRY CREDITORS - CONTRACTORS")
+    share the same TDS/GST Description text. Left blank only when neither
+    the payee's own row nor any same-category row has one."""
     base = {"Link Ref Code": link_ref_code, "Detail Link Ref Code": link_ref_code}
-    description = matched.get("Description", "")
+    description = matched.get("Description", "") or master_repository.find_description_for_head(
+        matched.get("Account Head"), matched.get("Parent Account Head")
+    ) or ""
 
     if txn.classification.head == "Contractor":
         return [

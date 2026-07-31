@@ -138,6 +138,35 @@ def find_party(payee_name: str | None) -> dict | None:
     return None
 
 
+def find_description_for_head(account_head: str | None, parent_account_head: str | None) -> str | None:
+    """When a payee's own Master row has no Description, other Master rows
+    sharing the same Account Head or Parent Account Head often do (e.g. many
+    Contractor payees share Parent Account Head "SUNDRY CREDITORS -
+    CONTRACTORS", and at least one already has its Description filled in
+    with the correct TDS/GST category text) - reuse that Description.
+
+    Deterministic exact-value lookup on Master's own Account Head / Parent
+    Account Head columns, not keyword or fuzzy matching. Tries Account Head
+    first, then Parent Account Head; returns the first non-empty Description
+    found, or None if neither yields a match."""
+    df = _load_master_df()
+    if "Description" not in df.columns:
+        return None
+
+    has_description = df["Description"].astype(str).str.strip() != ""
+
+    for column, value in (("Account Head", account_head), ("Parent Account Head", parent_account_head)):
+        if not value or column not in df.columns:
+            continue
+        key = _normalize(str(value))
+        normalized_column = df[column].astype(str).apply(_normalize)
+        matches = df[has_description & (normalized_column == key)]
+        if not matches.empty:
+            return str(matches.iloc[0]["Description"])
+
+    return None
+
+
 def clear_cache() -> None:
     """Force the next lookup to re-fetch Master from Sheets (e.g. after edits)."""
     _load_master_df.cache_clear()

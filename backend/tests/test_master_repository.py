@@ -149,3 +149,56 @@ def test_find_party_matches_via_canonical_form(monkeypatch):
     assert master_repository.find_party("DK Plywood Pvt Ltd")["Payee Name"] == "D K PLYWOOD PVT LTD"
     assert master_repository.find_party("Prayag Polymers Limited")["Payee Name"] == "PRAYAG POLYMERS PVT LTD"
     assert master_repository.find_party("Totally Unrelated Company") is None
+
+
+def test_find_description_for_head_reuses_description_from_same_parent_account_head(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [
+            {
+                "Payee Name": "MUKESH KUMAR",
+                "Account Head": "MUKESH KUMAR",
+                "Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS",
+                "Description": "TDS ON CONTRACTORS",
+            },
+            {
+                "Payee Name": "NAVEEN YADAV",
+                "Account Head": "NAVEEN YADAV",
+                "Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS",
+                "Description": "",
+            },
+        ]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    result = master_repository.find_description_for_head(
+        "NAVEEN YADAV", "SUNDRY CREDITORS - CONTRACTORS"
+    )
+
+    assert result == "TDS ON CONTRACTORS"
+
+
+def test_find_description_for_head_falls_back_to_account_head_match(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [
+            {"Payee Name": "A", "Account Head": "RENT PAYABLE", "Parent Account Head": "", "Description": "TDS ON RENT PAID"},
+            {"Payee Name": "B", "Account Head": "RENT PAYABLE", "Parent Account Head": "", "Description": ""},
+        ]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    result = master_repository.find_description_for_head("RENT PAYABLE", "")
+
+    assert result == "TDS ON RENT PAID"
+
+
+def test_find_description_for_head_returns_none_when_no_category_match(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [
+            {"Payee Name": "A", "Account Head": "A", "Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS", "Description": "TDS ON CONTRACTORS"},
+        ]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    result = master_repository.find_description_for_head("UNRELATED", "SUNDRY DEBTORS - OTHERS")
+
+    assert result is None
