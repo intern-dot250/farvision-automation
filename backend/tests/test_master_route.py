@@ -23,6 +23,15 @@ def test_get_head_options_derives_from_master(monkeypatch):
     assert "Contractor" in heads
     assert "SUNDRY CREDITORS - OTHER" in heads
     assert "Internal" in heads
+    # "Imprest"/"Vendor"/"Collection"/"Bank Charges" come from the bank
+    # statement's own HEAD column, not from Master's Parent Account Head
+    # text, so they'd never appear from scanning Master alone (confirmed via
+    # live testing - Master genuinely has no "Imprest" Parent Account Head
+    # anywhere) - the known-heads baseline must still surface them.
+    assert "Imprest" in heads
+    assert "Vendor" in heads
+    assert "Collection" in heads
+    assert "Bank Charges" in heads
 
 
 def test_get_account_head_options_returns_distinct_values(monkeypatch):
