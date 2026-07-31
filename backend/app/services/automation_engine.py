@@ -4,7 +4,16 @@ from datetime import datetime
 
 from app.core.config import get_settings
 from app.core.logger import logger
-from app.services import classifier, ledger_repository, master_repository, ref_code, sheets_client, validation
+from app.services import (
+    classifier,
+    ledger_repository,
+    master_repository,
+    override_rules,
+    override_rules_repository,
+    ref_code,
+    sheets_client,
+    validation,
+)
 from app.services.classifier import ClassificationResult
 
 BANK_STATEMENT_WORKSHEET = "YES IDW 0490"
@@ -435,9 +444,26 @@ def _process_rows(bank_rows: list[dict], run_id: str, settings) -> list[Transact
             return stop.value
 
 
+def _load_override_rule_index(run_id: str) -> override_rules.RuleIndex:
+    """Loaded once per run (not per transaction) - see override_rules.py for
+    the matching logic itself. Failing to load (Supabase unreachable, table
+    not created yet, ...) degrades to "no overrides applied" rather than
+    blocking the whole automation run."""
+    try:
+        active_rules = override_rules_repository.list_active()
+        return override_rules.build_rule_index(active_rules)
+    except Exception as exc:
+        logger.warning(f"[{run_id}] Failed to load override rules, continuing without them: {exc}")
+        ledger_repository.log_audit(
+            run_id, "warning", "Failed to load override rules", {"error": str(exc)}
+        )
+        return {}
+
+
 def _assign_rows(transactions: list[TransactionRowSet], settings, run_id: str) -> None:
     dw_next_ref = ref_code.get_next_ref_code(settings.DEPOSIT_WITHDRAWAL_SHEET_ID, "DepositWithdrawal")
     rp_next_ref = ref_code.get_next_ref_code(settings.RECEIPT_PAYMENT_SHEET_ID, "ReceiptPayment")
+    rule_index = _load_override_rule_index(run_id)
 
     for txn in transactions:
         if txn.destination not in ("receipt_payment", "deposit_withdrawal"):
@@ -448,6 +474,17 @@ def _assign_rows(transactions: list[TransactionRowSet], settings, run_id: str) -
             if txn.destination == "receipt_payment"
             else _build_deposit_withdrawal_rows(txn, dw_next_ref)
         )
+
+        # Override Rules run after classification/row-generation but before
+        # validation - only ever replacing the LedgerDetails Account Head
+        # already computed above. Narration parsing, payee extraction, head
+        # classification, duplicate detection, and validation itself are
+        # all untouched by this.
+        override = override_rules.find_override(
+            txn.description, txn.classification.head, txn.source_sheet, rule_index
+        )
+        if override:
+            rows["LedgerDetails"][0]["Account Head"] = override
 
         errors = validation.validate_rows(rows)
         if errors:

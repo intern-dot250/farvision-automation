@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from app.services.automation_engine import (
     TransactionRowSet,
+    _assign_rows,
     _build_deposit_withdrawal_rows,
     _build_receipt_payment_rows,
     _distinct_sheet_names,
@@ -640,3 +641,100 @@ def test_deposit_withdrawal_bank_name_resolves_full_form_from_master_by_suffix(m
     rows = _build_deposit_withdrawal_rows(txn, link_ref_code=1)
 
     assert rows["DepositWithdrawal"][0]["BankName"] == "YES BANK RERA 045563200000377"
+
+
+def test_assign_rows_applies_matching_override_rule(monkeypatch):
+    txn = _receipt_payment_txn("Imprest", {})
+    txn.description = "YIB-NEFT-YESME61620064305-Ravi Vats-UBIN0567370-Imprest-UNION BANK OF INDIA"
+    txn.source_sheet = "YES AH IDW 2457"
+
+    monkeypatch.setattr(
+        "app.services.automation_engine.ref_code.get_next_ref_code", lambda *a, **k: 1
+    )
+    monkeypatch.setattr(
+        "app.services.automation_engine.override_rules_repository.list_active",
+        lambda: [
+            {
+                "id": 1,
+                "description_keyword": "Ravi Vats",
+                "head": "Imprest",
+                "sheet_name": "YES AH IDW 2457",
+                "account_head": "Ravi Vats(555)",
+                "is_active": True,
+            }
+        ],
+    )
+
+    _assign_rows([txn], _FakeSettings(), run_id="test-run")
+
+    assert txn.destination == "receipt_payment"
+    assert txn.rows["LedgerDetails"][0]["Account Head"] == "Ravi Vats(555)"
+    # Parent Account Head is untouched by Override Rules, per the explicit
+    # decision to only override Account Head.
+    assert txn.rows["LedgerDetails"][0]["Parent Account Head"] != "Ravi Vats(555)"
+
+
+def test_assign_rows_leaves_account_head_unchanged_when_no_rule_matches(monkeypatch):
+    txn = _receipt_payment_txn("Contractor", {"Account Head": "Auto Matched Head"})
+    txn.source_sheet = "YES AH IDW 2457"
+
+    monkeypatch.setattr(
+        "app.services.automation_engine.ref_code.get_next_ref_code", lambda *a, **k: 1
+    )
+    monkeypatch.setattr(
+        "app.services.automation_engine.override_rules_repository.list_active",
+        lambda: [
+            {
+                "id": 1,
+                "description_keyword": "Ravi Vats",
+                "head": "Imprest",
+                "sheet_name": "YES AH IDW 2457",
+                "account_head": "Ravi Vats(555)",
+                "is_active": True,
+            }
+        ],
+    )
+
+    _assign_rows([txn], _FakeSettings(), run_id="test-run")
+
+    assert txn.rows["LedgerDetails"][0]["Account Head"] == "Auto Matched Head"
+
+
+def test_assign_rows_with_no_active_rules_leaves_todays_behavior_identical(monkeypatch):
+    txn = _receipt_payment_txn("Contractor", {"Account Head": "Auto Matched Head"})
+    txn.source_sheet = "YES AH IDW 2457"
+
+    monkeypatch.setattr(
+        "app.services.automation_engine.ref_code.get_next_ref_code", lambda *a, **k: 1
+    )
+    monkeypatch.setattr(
+        "app.services.automation_engine.override_rules_repository.list_active", lambda: []
+    )
+
+    _assign_rows([txn], _FakeSettings(), run_id="test-run")
+
+    assert txn.rows["LedgerDetails"][0]["Account Head"] == "Auto Matched Head"
+
+
+def test_assign_rows_degrades_gracefully_when_rule_loading_fails(monkeypatch):
+    # A Supabase hiccup (unreachable, table not created yet, ...) must not
+    # block the whole automation run - it should log and continue as if
+    # there were no active rules.
+    txn = _receipt_payment_txn("Contractor", {"Account Head": "Auto Matched Head"})
+    txn.source_sheet = "YES AH IDW 2457"
+
+    def raise_error():
+        raise RuntimeError("Supabase unreachable")
+
+    monkeypatch.setattr(
+        "app.services.automation_engine.ref_code.get_next_ref_code", lambda *a, **k: 1
+    )
+    monkeypatch.setattr(
+        "app.services.automation_engine.override_rules_repository.list_active", raise_error
+    )
+
+    with patch("app.services.automation_engine.ledger_repository.log_audit"):
+        _assign_rows([txn], _FakeSettings(), run_id="test-run")
+
+    assert txn.destination == "receipt_payment"
+    assert txn.rows["LedgerDetails"][0]["Account Head"] == "Auto Matched Head"

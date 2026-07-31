@@ -6,3 +6,4 @@ class Tags:
     SHEETS = "Sheets"
     AUTOMATION = "Automation"
     HISTORY = "History"
+    OVERRIDE_RULES = "Override Rules"

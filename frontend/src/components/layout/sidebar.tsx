@@ -8,6 +8,7 @@ const NAV_ITEMS = [
   { label: "History", href: "/history" },
   { label: "Logs", href: "/logs" },
   { label: "Settings", href: "/settings" },
+  { label: "Override Rules", href: "/override-rules" },
 ] as const;
 
 export function Sidebar() {
