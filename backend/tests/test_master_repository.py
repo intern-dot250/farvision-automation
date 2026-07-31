@@ -158,12 +158,14 @@ def test_find_description_for_head_reuses_description_from_same_parent_account_h
                 "Payee Name": "MUKESH KUMAR",
                 "Account Head": "MUKESH KUMAR",
                 "Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS",
+                "Deduction Type": "Goods and Service Tax",
                 "Description": "TDS ON CONTRACTORS",
             },
             {
                 "Payee Name": "NAVEEN YADAV",
                 "Account Head": "NAVEEN YADAV",
                 "Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS",
+                "Deduction Type": "",
                 "Description": "",
             },
         ]
@@ -171,7 +173,7 @@ def test_find_description_for_head_reuses_description_from_same_parent_account_h
     monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
 
     result = master_repository.find_description_for_head(
-        "NAVEEN YADAV", "SUNDRY CREDITORS - CONTRACTORS"
+        "NAVEEN YADAV", "SUNDRY CREDITORS - CONTRACTORS", "Goods and Service Tax"
     )
 
     assert result == "TDS ON CONTRACTORS"
@@ -180,13 +182,25 @@ def test_find_description_for_head_reuses_description_from_same_parent_account_h
 def test_find_description_for_head_falls_back_to_account_head_match(monkeypatch):
     df = pd.DataFrame.from_records(
         [
-            {"Payee Name": "A", "Account Head": "RENT PAYABLE", "Parent Account Head": "", "Description": "TDS ON RENT PAID"},
-            {"Payee Name": "B", "Account Head": "RENT PAYABLE", "Parent Account Head": "", "Description": ""},
+            {
+                "Payee Name": "A",
+                "Account Head": "RENT PAYABLE",
+                "Parent Account Head": "",
+                "Deduction Type": "Tax deducted at source",
+                "Description": "TDS ON RENT PAID",
+            },
+            {
+                "Payee Name": "B",
+                "Account Head": "RENT PAYABLE",
+                "Parent Account Head": "",
+                "Deduction Type": "",
+                "Description": "",
+            },
         ]
     )
     monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
 
-    result = master_repository.find_description_for_head("RENT PAYABLE", "")
+    result = master_repository.find_description_for_head("RENT PAYABLE", "", "Tax deducted at source")
 
     assert result == "TDS ON RENT PAID"
 
@@ -194,11 +208,80 @@ def test_find_description_for_head_falls_back_to_account_head_match(monkeypatch)
 def test_find_description_for_head_returns_none_when_no_category_match(monkeypatch):
     df = pd.DataFrame.from_records(
         [
-            {"Payee Name": "A", "Account Head": "A", "Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS", "Description": "TDS ON CONTRACTORS"},
+            {
+                "Payee Name": "A",
+                "Account Head": "A",
+                "Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS",
+                "Deduction Type": "Tax deducted at source",
+                "Description": "TDS ON CONTRACTORS",
+            },
         ]
     )
     monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
 
-    result = master_repository.find_description_for_head("UNRELATED", "SUNDRY DEBTORS - OTHERS")
+    result = master_repository.find_description_for_head(
+        "UNRELATED", "SUNDRY DEBTORS - OTHERS", "Tax deducted at source"
+    )
+
+    assert result is None
+
+
+def test_find_description_for_head_does_not_mix_deduction_types(monkeypatch):
+    # A category row that matches on Account Head but has a DIFFERENT
+    # Deduction Type must not be used - "TDS ON RENT PAID" (a TDS row) must
+    # never be returned for a GST lookup just because they share an
+    # Account Head.
+    df = pd.DataFrame.from_records(
+        [
+            {
+                "Payee Name": "A",
+                "Account Head": "RENT PAYABLE",
+                "Parent Account Head": "",
+                "Deduction Type": "Tax deducted at source",
+                "Description": "TDS ON RENT PAID",
+            },
+        ]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    result = master_repository.find_description_for_head("RENT PAYABLE", "", "Goods and Service Tax")
+
+    assert result is None
+
+
+def test_find_deduction_for_head_returns_paired_deduction_type_and_description(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [
+            {
+                "Payee Name": "A",
+                "Account Head": "SALARY PAYABLE",
+                "Parent Account Head": "",
+                "Deduction Type": "Tax deducted at source",
+                "Description": "TDS ON SALARY",
+            },
+        ]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    result = master_repository.find_deduction_for_head("SALARY PAYABLE", "")
+
+    assert result == ("Tax deducted at source", "TDS ON SALARY")
+
+
+def test_find_deduction_for_head_returns_none_when_no_category_match(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [
+            {
+                "Payee Name": "A",
+                "Account Head": "SALARY PAYABLE",
+                "Parent Account Head": "",
+                "Deduction Type": "Tax deducted at source",
+                "Description": "TDS ON SALARY",
+            },
+        ]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    result = master_repository.find_deduction_for_head("UNRELATED", "")
 
     assert result is None

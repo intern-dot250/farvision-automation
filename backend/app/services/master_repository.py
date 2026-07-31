@@ -138,33 +138,69 @@ def find_party(payee_name: str | None) -> dict | None:
     return None
 
 
-def find_description_for_head(account_head: str | None, parent_account_head: str | None) -> str | None:
-    """When a payee's own Master row has no Description, other Master rows
-    sharing the same Account Head or Parent Account Head often do (e.g. many
-    Contractor payees share Parent Account Head "SUNDRY CREDITORS -
-    CONTRACTORS", and at least one already has its Description filled in
-    with the correct TDS/GST category text) - reuse that Description.
-
-    Deterministic exact-value lookup on Master's own Account Head / Parent
-    Account Head columns, not keyword or fuzzy matching. Tries Account Head
-    first, then Parent Account Head; returns the first non-empty Description
-    found, or None if neither yields a match."""
+def _category_rows(account_head: str | None, parent_account_head: str | None) -> pd.DataFrame:
+    """Master rows sharing the given Account Head or Parent Account Head,
+    restricted to rows that actually carry a Deduction Type + Description
+    pair (the "category" rows). Deterministic exact-value lookup, not
+    keyword/fuzzy matching. Tries Account Head first, then Parent Account
+    Head; returns an empty frame if neither column exists or matches."""
     df = _load_master_df()
-    if "Description" not in df.columns:
-        return None
+    if "Deduction Type" not in df.columns or "Description" not in df.columns:
+        return df.iloc[0:0]
 
-    has_description = df["Description"].astype(str).str.strip() != ""
+    has_data = (df["Deduction Type"].astype(str).str.strip() != "") & (
+        df["Description"].astype(str).str.strip() != ""
+    )
 
     for column, value in (("Account Head", account_head), ("Parent Account Head", parent_account_head)):
         if not value or column not in df.columns:
             continue
         key = _normalize(str(value))
         normalized_column = df[column].astype(str).apply(_normalize)
-        matches = df[has_description & (normalized_column == key)]
+        matches = df[has_data & (normalized_column == key)]
         if not matches.empty:
-            return str(matches.iloc[0]["Description"])
+            return matches
 
-    return None
+    return df.iloc[0:0]
+
+
+def find_description_for_head(
+    account_head: str | None, parent_account_head: str | None, deduction_type: str
+) -> str | None:
+    """When a payee's own Master row has no Description for a specific
+    Deduction Type (e.g. the "Goods and Service Tax" row of a Vendor
+    payment), reuse the Description from another Master row that shares
+    the same Account Head/Parent Account Head AND the same Deduction Type
+    (e.g. many Vendor payees share Parent Account Head "SUNDRY CREDITORS -
+    OTHER" and at least one already has a GST Description filled in).
+
+    Matching on Deduction Type too prevents pulling in a Description meant
+    for a different deduction (e.g. a TDS row's "TDS ON RENT PAID" text
+    must never end up on a GST row just because they share an Account
+    Head)."""
+    matches = _category_rows(account_head, parent_account_head)
+    if matches.empty:
+        return None
+    key = _normalize(deduction_type)
+    same_type = matches[matches["Deduction Type"].astype(str).apply(_normalize) == key]
+    if same_type.empty:
+        return None
+    return str(same_type.iloc[0]["Description"])
+
+
+def find_deduction_for_head(
+    account_head: str | None, parent_account_head: str | None
+) -> tuple[str, str] | None:
+    """Like find_description_for_head, but for heads with no predetermined
+    Deduction Type (anything other than Contractor/Vendor): returns the
+    (Deduction Type, Description) pair from another Master row sharing the
+    same Account Head/Parent Account Head, so the two fields always come
+    from the same row and stay consistent with each other."""
+    matches = _category_rows(account_head, parent_account_head)
+    if matches.empty:
+        return None
+    row = matches.iloc[0]
+    return str(row["Deduction Type"]), str(row["Description"])
 
 
 def clear_cache() -> None:

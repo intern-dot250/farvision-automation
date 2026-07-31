@@ -249,18 +249,20 @@ def test_other_head_gets_single_master_driven_row_with_description():
     assert tax_rows[0]["Description"] == "Some description"
 
 
-def test_contractor_with_empty_description_still_emits_import_tax_info_rows():
-    # A missing Master Description no longer suppresses the row - it's just
-    # left blank so ImportTaxInfo still tracks 1:1 with ReceiptPayment.
+def test_contractor_with_empty_description_defaults_to_tds_on_contractors():
+    # A missing Master Description (and no same-category fallback match) no
+    # longer suppresses the row nor leaves it blank - every Contractor
+    # payment is a TDS-on-contractor deduction by definition, so it defaults
+    # to that fixed text as the last resort.
     txn = _receipt_payment_txn("Contractor", {})
     rows = _build_receipt_payment_rows(txn, link_ref_code=8)
 
     tax_rows = rows["ImportTaxInfo"]
     assert len(tax_rows) == 2
     assert tax_rows[0]["Deduction Type"] == "Tax deducted at source"
-    assert tax_rows[0]["Description"] == ""
+    assert tax_rows[0]["Description"] == "TDS ON CONTRACTORS"
     assert tax_rows[1]["Deduction Type"] == "Goods and Service Tax"
-    assert tax_rows[1]["Description"] == ""
+    assert tax_rows[1]["Description"] == "TDS ON CONTRACTORS"
 
 
 def test_vendor_with_empty_description_still_emits_import_tax_info_row():
@@ -286,22 +288,67 @@ def test_other_head_with_no_master_match_still_emits_blank_import_tax_info_row()
 def test_contractor_with_blank_description_falls_back_to_same_category_description():
     # When the payee's own Master row has no Description, reuse the
     # Description from another Master row sharing the same Account
-    # Head/Parent Account Head (master_repository.find_description_for_head).
+    # Head/Parent Account Head AND the same Deduction Type
+    # (master_repository.find_description_for_head) - each row's fallback
+    # lookup is keyed to its own Deduction Type so a TDS Description can't
+    # leak onto the GST row or vice versa.
     txn = _receipt_payment_txn(
         "Contractor",
         {"Account Head": "NAVEEN YADAV", "Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS"},
     )
 
+    def fake_fallback(account_head, parent_account_head, deduction_type):
+        return {
+            "Tax deducted at source": "TDS ON CONTRACTORS",
+            "Goods and Service Tax": "GST ON CONTRACTORS",
+        }[deduction_type]
+
     with patch(
         "app.services.automation_engine.master_repository.find_description_for_head",
-        return_value="TDS ON CONTRACTORS",
+        side_effect=fake_fallback,
     ) as mock_fallback:
         rows = _build_receipt_payment_rows(txn, link_ref_code=11)
 
-    mock_fallback.assert_called_once_with("NAVEEN YADAV", "SUNDRY CREDITORS - CONTRACTORS")
+    assert mock_fallback.call_count == 2
+    mock_fallback.assert_any_call("NAVEEN YADAV", "SUNDRY CREDITORS - CONTRACTORS", "Tax deducted at source")
+    mock_fallback.assert_any_call("NAVEEN YADAV", "SUNDRY CREDITORS - CONTRACTORS", "Goods and Service Tax")
     tax_rows = rows["ImportTaxInfo"]
     assert tax_rows[0]["Description"] == "TDS ON CONTRACTORS"
-    assert tax_rows[1]["Description"] == "TDS ON CONTRACTORS"
+    assert tax_rows[1]["Description"] == "GST ON CONTRACTORS"
+
+
+def test_vendor_with_blank_description_falls_back_to_same_category_gst_description():
+    txn = _receipt_payment_txn(
+        "Vendor",
+        {"Account Head": "SOME VENDOR", "Parent Account Head": "SUNDRY CREDITORS - OTHER"},
+    )
+
+    with patch(
+        "app.services.automation_engine.master_repository.find_description_for_head",
+        return_value="Nil Rated-Service",
+    ) as mock_fallback:
+        rows = _build_receipt_payment_rows(txn, link_ref_code=12)
+
+    mock_fallback.assert_called_once_with("SOME VENDOR", "SUNDRY CREDITORS - OTHER", "Goods and Service Tax")
+    assert rows["ImportTaxInfo"][0]["Description"] == "Nil Rated-Service"
+
+
+def test_other_head_with_blank_deduction_falls_back_to_paired_deduction_and_description():
+    txn = _receipt_payment_txn(
+        "Collection",
+        {"Account Head": "SOME COLLECTOR", "Parent Account Head": "SUNDRY DEBTORS"},
+    )
+
+    with patch(
+        "app.services.automation_engine.master_repository.find_deduction_for_head",
+        return_value=("Tax deducted at source", "TDS ON COMMISSION"),
+    ) as mock_fallback:
+        rows = _build_receipt_payment_rows(txn, link_ref_code=13)
+
+    mock_fallback.assert_called_once_with("SOME COLLECTOR", "SUNDRY DEBTORS")
+    tax_rows = rows["ImportTaxInfo"]
+    assert tax_rows[0]["Deduction Type"] == "Tax deducted at source"
+    assert tax_rows[0]["Description"] == "TDS ON COMMISSION"
 
 
 def test_collection_head_with_master_match_and_blank_description_routes_to_receipt_payment():

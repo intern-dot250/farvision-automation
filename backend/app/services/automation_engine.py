@@ -113,31 +113,68 @@ class RunResult:
     transactions: list[TransactionRowSet]
 
 
+_CONTRACTOR_DEFAULT_DESCRIPTION = "TDS ON CONTRACTORS"
+
+
+def _resolve_import_tax_description(matched: dict, deduction_type: str, default: str = "") -> str:
+    """Description for one ImportTaxInfo row of a known Deduction Type
+    (Contractor's TDS/GST rows, Vendor's GST row). Tries the payee's own
+    Master Description first, then another Master row sharing the same
+    Account Head/Parent Account Head AND the same Deduction Type
+    (master_repository.find_description_for_head) - matching on Deduction
+    Type too prevents a TDS-category Description ("TDS ON RENT PAID")
+    ending up on a GST row just because they share an Account Head. Falls
+    back to `default` only when neither source has anything."""
+    description = matched.get("Description", "")
+    if description:
+        return description
+    fallback = master_repository.find_description_for_head(
+        matched.get("Account Head"), matched.get("Parent Account Head"), deduction_type
+    )
+    return fallback or default
+
+
 def _build_import_tax_info_rows(txn: TransactionRowSet, link_ref_code: int, matched: dict) -> list[dict]:
     """Every Receipt/Payment transaction gets a matching ImportTaxInfo row on
     the same Link Ref Code, so the tab tracks 1:1 with ReceiptPayment.
     Contractor payments get both a TDS row and a GST row; Vendor payments
     get only the GST row; every other head keeps a single Master-driven row.
-    Deduction Type/Description come from the matched Master row when
-    available. When the payee's own Master row has no Description, fall
-    back to another Master row sharing the same Account Head/Parent Account
-    Head that does (master_repository.find_description_for_head) - many
-    payees under the same category (e.g. "SUNDRY CREDITORS - CONTRACTORS")
-    share the same TDS/GST Description text. Left blank only when neither
-    the payee's own row nor any same-category row has one."""
+
+    Contractor/Vendor already know their Deduction Type, so only the
+    Description needs resolving (own Master row, then same-category
+    fallback, then a fixed default for Contractor since every Contractor
+    payment is a TDS-on-contractor deduction by definition). Other heads
+    don't have a predetermined Deduction Type, so Deduction Type and
+    Description are resolved together as a pair from the same Master row
+    (master_repository.find_deduction_for_head) to keep them consistent."""
     base = {"Link Ref Code": link_ref_code, "Detail Link Ref Code": link_ref_code}
-    description = matched.get("Description", "") or master_repository.find_description_for_head(
-        matched.get("Account Head"), matched.get("Parent Account Head")
-    ) or ""
 
     if txn.classification.head == "Contractor":
+        tds_description = _resolve_import_tax_description(
+            matched, "Tax deducted at source", default=_CONTRACTOR_DEFAULT_DESCRIPTION
+        )
+        gst_description = _resolve_import_tax_description(
+            matched, "Goods and Service Tax", default=_CONTRACTOR_DEFAULT_DESCRIPTION
+        )
         return [
-            {**base, "Deduction Type": "Tax deducted at source", "Description": description},
-            {**base, "Deduction Type": "Goods and Service Tax", "Description": description},
+            {**base, "Deduction Type": "Tax deducted at source", "Description": tds_description},
+            {**base, "Deduction Type": "Goods and Service Tax", "Description": gst_description},
         ]
     if txn.classification.head == "Vendor":
+        description = _resolve_import_tax_description(matched, "Goods and Service Tax")
         return [{**base, "Deduction Type": "Goods and Service Tax", "Description": description}]
-    return [{**base, "Deduction Type": matched.get("Deduction Type", ""), "Description": description}]
+
+    deduction_type = matched.get("Deduction Type", "")
+    description = matched.get("Description", "")
+    if not deduction_type or not description:
+        fallback = master_repository.find_deduction_for_head(
+            matched.get("Account Head"), matched.get("Parent Account Head")
+        )
+        if fallback:
+            fallback_type, fallback_description = fallback
+            deduction_type = deduction_type or fallback_type
+            description = description or fallback_description
+    return [{**base, "Deduction Type": deduction_type, "Description": description}]
 
 
 def _build_receipt_payment_rows(txn: TransactionRowSet, link_ref_code: int) -> dict[str, list[dict]]:
