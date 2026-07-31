@@ -233,46 +233,54 @@ def test_receipt_payment_bank_name_blank_when_master_and_narration_have_none():
     assert rows["ReceiptPayment"][0]["BankName"] == ""
 
 
-def test_other_head_never_emits_import_tax_info_rows_even_with_description():
-    # Only Contractor/Vendor need TDS/GST ImportTaxInfo rows - every other
-    # head (Collection, Imprest, "SUNDRY CREDITORS - OTHER", ...) skips
-    # ImportTaxInfo entirely, even when Master happens to have a Description,
-    # so they're never blocked in Review over it either.
+def test_other_head_gets_single_master_driven_row_with_description():
+    # Every head - not just Contractor/Vendor - gets an ImportTaxInfo row so
+    # the tab tracks 1:1 with ReceiptPayment; other heads pull Deduction
+    # Type/Description straight from the matched Master row.
     txn = _receipt_payment_txn(
         "SUNDRY CREDITORS - OTHER",
         {"Deduction Type": "Something Else", "Description": "Some description"},
     )
     rows = _build_receipt_payment_rows(txn, link_ref_code=5)
 
-    assert rows["ImportTaxInfo"] == []
+    tax_rows = rows["ImportTaxInfo"]
+    assert len(tax_rows) == 1
+    assert tax_rows[0]["Deduction Type"] == "Something Else"
+    assert tax_rows[0]["Description"] == "Some description"
 
 
-def test_contractor_with_empty_description_emits_no_import_tax_info_rows():
-    # When Master has no Description, writing a row with a Deduction Type
-    # but a blank Description violates the "never blank when Deduction Type
-    # is shown" rule. _build_import_tax_info_rows returns [] in that case
-    # so _assign_rows can reroute to Review instead.
+def test_contractor_with_empty_description_still_emits_import_tax_info_rows():
+    # A missing Master Description no longer suppresses the row - it's just
+    # left blank so ImportTaxInfo still tracks 1:1 with ReceiptPayment.
     txn = _receipt_payment_txn("Contractor", {})
     rows = _build_receipt_payment_rows(txn, link_ref_code=8)
 
-    assert rows["ImportTaxInfo"] == []
+    tax_rows = rows["ImportTaxInfo"]
+    assert len(tax_rows) == 2
+    assert tax_rows[0]["Deduction Type"] == "Tax deducted at source"
+    assert tax_rows[0]["Description"] == ""
+    assert tax_rows[1]["Deduction Type"] == "Goods and Service Tax"
+    assert tax_rows[1]["Description"] == ""
 
 
-def test_vendor_with_empty_description_emits_no_import_tax_info_rows():
+def test_vendor_with_empty_description_still_emits_import_tax_info_row():
     txn = _receipt_payment_txn("Vendor", {})
     rows = _build_receipt_payment_rows(txn, link_ref_code=9)
 
-    assert rows["ImportTaxInfo"] == []
+    tax_rows = rows["ImportTaxInfo"]
+    assert len(tax_rows) == 1
+    assert tax_rows[0]["Deduction Type"] == "Goods and Service Tax"
+    assert tax_rows[0]["Description"] == ""
 
 
-def test_other_head_with_empty_description_emits_no_import_tax_info_rows():
-    txn = _receipt_payment_txn(
-        "SUNDRY CREDITORS - OTHER",
-        {"Deduction Type": "Something Else"},
-    )
+def test_other_head_with_no_master_match_still_emits_blank_import_tax_info_row():
+    txn = _receipt_payment_txn("Collection", {})
     rows = _build_receipt_payment_rows(txn, link_ref_code=10)
 
-    assert rows["ImportTaxInfo"] == []
+    tax_rows = rows["ImportTaxInfo"]
+    assert len(tax_rows) == 1
+    assert tax_rows[0]["Deduction Type"] == ""
+    assert tax_rows[0]["Description"] == ""
 
 
 def test_collection_head_with_master_match_and_blank_description_routes_to_receipt_payment():

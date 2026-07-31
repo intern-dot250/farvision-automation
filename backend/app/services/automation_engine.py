@@ -114,28 +114,24 @@ class RunResult:
 
 
 def _build_import_tax_info_rows(txn: TransactionRowSet, link_ref_code: int, matched: dict) -> list[dict]:
-    """Contractor payments always need both a TDS row and a GST row on the
-    same Link Ref Code; Vendor payments only need the GST row. Only these two
-    heads need ImportTaxInfo rows at all - other heads (Collection, Imprest,
-    ...) never had TDS/GST requirements.
-
-    Only emits rows when the matched Master row has a non-empty Description;
-    returns an empty list otherwise (no TDS/GST rows for that transaction -
-    the transaction itself still routes to Receipt/Payment, it's just
-    missing the ImportTaxInfo detail rows)."""
-    if txn.classification.head not in ("Contractor", "Vendor"):
-        return []
-    description = matched.get("Description", "")
-    if not description:
-        return []
+    """Every Receipt/Payment transaction gets a matching ImportTaxInfo row on
+    the same Link Ref Code, so the tab tracks 1:1 with ReceiptPayment.
+    Contractor payments get both a TDS row and a GST row; Vendor payments
+    get only the GST row; every other head keeps a single Master-driven row.
+    Deduction Type/Description come from the matched Master row when
+    available and are left blank otherwise - a missing Master match or
+    Description no longer suppresses the row."""
     base = {"Link Ref Code": link_ref_code, "Detail Link Ref Code": link_ref_code}
+    description = matched.get("Description", "")
 
     if txn.classification.head == "Contractor":
         return [
             {**base, "Deduction Type": "Tax deducted at source", "Description": description},
             {**base, "Deduction Type": "Goods and Service Tax", "Description": description},
         ]
-    return [{**base, "Deduction Type": "Goods and Service Tax", "Description": description}]
+    if txn.classification.head == "Vendor":
+        return [{**base, "Deduction Type": "Goods and Service Tax", "Description": description}]
+    return [{**base, "Deduction Type": matched.get("Deduction Type", ""), "Description": description}]
 
 
 def _build_receipt_payment_rows(txn: TransactionRowSet, link_ref_code: int) -> dict[str, list[dict]]:
