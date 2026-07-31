@@ -116,8 +116,15 @@ class RunResult:
 def _build_import_tax_info_rows(txn: TransactionRowSet, link_ref_code: int, matched: dict) -> list[dict]:
     """Contractor payments always need both a TDS row and a GST row on the
     same Link Ref Code; Vendor payments only need the GST row. Any other
-    head keeps the original single Master-driven row."""
+    head keeps the original single Master-driven row.
+
+    Only emits rows when the matched Master row has a non-empty Description.
+    Returns an empty list when Description is missing — the caller in
+    _assign_rows will then reroute the transaction to Review instead of
+    writing a half-complete row."""
     description = matched.get("Description", "")
+    if not description:
+        return []
     base = {"Link Ref Code": link_ref_code, "Detail Link Ref Code": link_ref_code}
 
     if txn.classification.head == "Contractor":
@@ -408,6 +415,21 @@ def _assign_rows(transactions: list[TransactionRowSet], settings, run_id: str) -
             )
             txn.destination = "review"
             txn.review_reason = "; ".join(errors)
+            continue
+
+        # ImportTaxInfo rows require a non-empty Description, which is
+        # enforced by _build_import_tax_info_rows returning an empty list
+        # when the matched Master row has no Description. Route those to
+        # Review rather than writing half-complete rows to Sheets.
+        if txn.destination == "receipt_payment" and not rows.get("ImportTaxInfo"):
+            logger.warning(f"[{run_id}] SL#{txn.sl_no} ImportTaxInfo.Description is required but empty")
+            ledger_repository.log_audit(
+                run_id, "error",
+                f"SL#{txn.sl_no} ImportTaxInfo.Description is required but empty",
+                {"reference": txn.reference},
+            )
+            txn.destination = "review"
+            txn.review_reason = "ImportTaxInfo.Description is required but empty"
             continue
 
         txn.rows = rows

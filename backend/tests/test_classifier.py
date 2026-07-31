@@ -128,3 +128,70 @@ def test_existing_head_with_no_master_match_still_routes_without_review():
     assert result.head == "Vendor"
     assert result.needs_review is False
     assert result.matched_master_row is None
+
+
+# --- Fallback payee extraction (plain-name descriptions) ---
+
+
+def test_plain_name_description_becomes_payee_name():
+    # Descriptions with no NEFT/RTGS/TPT/UPI/IMPS prefix are treated as
+    # raw payee names.
+    result = classify_transaction("DWARKADHIS PROJECTS PVT LTD")
+
+    assert result.payee_name == "DWARKADHIS PROJECTS PVT LTD"
+
+
+def test_plain_name_description_cleans_up_account_number_trailer():
+    # "VANDANA KHULLAR - A/C 12345678" → "VANDANA KHULLAR"
+    result = classify_transaction("VANDANA KHULLAR - 1234567890")
+
+    assert result.payee_name == "VANDANA KHULLAR"
+
+
+def test_neft_credit_style_fallback_extracts_payee_after_ifsc():
+    # "NEFT Cr-IDFB0021001-Mrs. ANSHU SHARMA-DWARKADHIS" — the parser
+    # already handles IFSC-before-payee, but verify the fallback chain too.
+    result = classify_transaction(
+        "NEFT Cr-IDFB0021001-Mrs. ANSHU SHARMA-DWARKADHIS"
+    )
+
+    assert result.payee_name == "Mrs. ANSHU SHARMA"
+
+
+def test_neft_style_fallback_extracts_payee_after_ifsc():
+    # Standard NEFT dash-joined format: ifsc appears before payee, parser
+    # handles it. Fallback test for edge case where IFSC is before payee.
+    result = classify_transaction(
+        "YIB-NEFT-IDFB0021001-Mrs. ANSHU SHARMA-DWARKADHIS"
+    )
+
+    assert result.payee_name == "Mrs. ANSHU SHARMA"
+
+
+def test_imps_narration_extracts_payee_from_second_segment():
+    # IMPS slash-delimited: IMPS/{payee}/{account}/RRN:.../...
+    result = classify_transaction(
+        "IMPS/Jayant Raitani/XXX8180/RRN:618614869331/PC123"
+    )
+
+    assert result.payee_name == "Jayant Raitani"
+
+
+def test_imps_with_na_placeholder_returns_no_payee():
+    # IMPS/NA/... means unknown payee — should not return "NA" as payee.
+    result = classify_transaction(
+        "IMPS/NA/XXXX0091/RRN:616698356024/PC38978"
+    )
+
+    assert result.payee_name is None
+
+
+def test_plain_name_description_routes_to_review_without_master_match():
+    # A plain name that doesn't match Master → review (not Internal).
+    with patch("app.services.classifier.master_repository.find_party", return_value=None):
+        result = classify_transaction("VIJAY YADAV")
+
+    assert result.is_internal is False
+    assert result.payee_name == "VIJAY YADAV"
+    assert result.needs_review is True
+    assert result.head == "Unclassified"

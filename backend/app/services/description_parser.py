@@ -12,6 +12,36 @@ class ParsedDescription:
     bank_name: str | None = None
 
 
+def _parse_slash_delimited(description: str) -> ParsedDescription | None:
+    """Handle IMPS-style slash-delimited narrations and similar formats.
+
+    UPI narrations ("UPI/{ref}/From:{vpa}/To:{vpa}/...") use "/" as
+    delimiter and explicitly label each side - handled separately below
+    because direction matters.
+
+    IMPS narrations ("IMPS/{payee name}/{account info}/RRN:{ref}/...")
+    use "/" but don't label From/To - the second segment is the payee name.
+    """
+    tokens = [t.strip() for t in description.split("/") if t.strip()]
+    if not tokens:
+        return None
+
+    first = tokens[0].upper()
+
+    if first.startswith("UPI"):
+        return None  # handled by _parse_upi()
+
+    if first == "IMPS" and len(tokens) >= 2:
+        # IMPS/{payee name}/{account or ref}/RRN:{...}/...
+        payee_candidate = tokens[1].strip() or None
+        # "NA" is a placeholder meaning unknown, not an actual payee name.
+        if payee_candidate and payee_candidate.upper() == "NA":
+            payee_candidate = None
+        return ParsedDescription(payee_name=payee_candidate, ifsc=None, is_internal_format=False)
+
+    return None
+
+
 def _parse_upi(description: str, is_credit: bool | None) -> ParsedDescription | None:
     """UPI narrations ("UPI/{ref}/From:{vpa}/To:{vpa}...") use "/" as the
     delimiter and label each side explicitly, rather than the dash-separated
@@ -55,6 +85,8 @@ def parse_description(description: str, is_credit: bool | None = None) -> Parsed
     distinguished here by how early it's found (index < 3 can't fit a
     channel+mode+utr prefix before it).
     UPI narrations have their own "/"-delimited shape - see _parse_upi().
+    IMPS narrations use "/" too but don't label From/To - the second segment
+    is the payee name. See _parse_slash_delimited().
     Internal inter-account transfers (mode=TPT) have no IFSC segment, which
     is how they're recognized as internal (confirmed business rule) - and
     have no counterparty bank name either, since they're between our own
@@ -64,6 +96,10 @@ def parse_description(description: str, is_credit: bool | None = None) -> Parsed
     if upi_result is not None:
         return upi_result
 
+    slash_result = _parse_slash_delimited(description)
+    if slash_result is not None:
+        return slash_result
+
     tokens = description.split("-")
 
     ifsc_index = next(
@@ -72,14 +108,15 @@ def parse_description(description: str, is_credit: bool | None = None) -> Parsed
     )
 
     if ifsc_index is None:
-        # Internal transfers (mode=TPT) still name the counterparty entity in
-        # the description ("YIB-TPT-Dwarkadhis Projects Pvt Ltd...-045563...")
-        # - extract it for display, without changing the Internal
-        # classification, which stays based on the missing IFSC alone.
-        internal_name = None
+        # Internal transfers (mode=TPT) have no IFSC and are explicitly
+        # marked with TPT in the description. Other no-IFSC descriptions
+        # (bank charges, plain payee names, etc.) are NOT internal - they
+        # just don't have parseable structure, so return them as-is so the
+        # classifier's fallback payee extraction can try.
         if len(tokens) >= 4 and tokens[1].strip().upper() == "TPT":
             internal_name = tokens[2].strip() or None
-        return ParsedDescription(payee_name=internal_name, ifsc=None, is_internal_format=True)
+            return ParsedDescription(payee_name=internal_name, ifsc=None, is_internal_format=True)
+        return ParsedDescription(payee_name=None, ifsc=None, is_internal_format=False)
 
     if ifsc_index < 3:
         # Credit-style shape: IFSC found too early to fit a

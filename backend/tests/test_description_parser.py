@@ -45,8 +45,27 @@ def test_internal_transfer_with_no_tpt_marker_has_no_payee_name():
     # Not the "{channel}-TPT-{name}-{account}" shape - don't guess a name.
     result = parse_description("IMPS/NA/XXXX0091/RRN:616698356024/PC38978 11144658468")
 
-    assert result.is_internal_format is True
+    # IMPS-style narrations are now handled by the slash-delimited branch.
+    assert result.is_internal_format is False
     assert result.payee_name is None
+
+
+def test_parses_imps_narration_with_payee_in_second_segment():
+    # IMPS/{payee name}/{account info}/RRN:{...}/... — the second segment
+    # is the payee name.
+    result = parse_description(
+        "IMPS/Jayant Raitani/XXX8180/RRN:618614869331/PC123"
+    )
+
+    assert result.payee_name == "Jayant Raitani"
+    assert result.is_internal_format is False
+    assert result.ifsc is None
+
+
+def test_parses_imps_narration_with_two_word_payee():
+    result = parse_description("IMPS/AMIT KUMAR/XXX3986/RRN:618712584961/PC456")
+
+    assert result.payee_name == "AMIT KUMAR"
 
 
 def test_parses_credit_style_narration_with_ifsc_before_payee():

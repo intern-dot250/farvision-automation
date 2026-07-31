@@ -246,6 +246,34 @@ def test_other_head_keeps_original_master_driven_single_row():
     assert tax_rows[0]["Description"] == "Some description"
 
 
+def test_contractor_with_empty_description_emits_no_import_tax_info_rows():
+    # When Master has no Description, writing a row with a Deduction Type
+    # but a blank Description violates the "never blank when Deduction Type
+    # is shown" rule. _build_import_tax_info_rows returns [] in that case
+    # so _assign_rows can reroute to Review instead.
+    txn = _receipt_payment_txn("Contractor", {})
+    rows = _build_receipt_payment_rows(txn, link_ref_code=8)
+
+    assert rows["ImportTaxInfo"] == []
+
+
+def test_vendor_with_empty_description_emits_no_import_tax_info_rows():
+    txn = _receipt_payment_txn("Vendor", {})
+    rows = _build_receipt_payment_rows(txn, link_ref_code=9)
+
+    assert rows["ImportTaxInfo"] == []
+
+
+def test_other_head_with_empty_description_emits_no_import_tax_info_rows():
+    txn = _receipt_payment_txn(
+        "SUNDRY CREDITORS - OTHER",
+        {"Deduction Type": "Something Else"},
+    )
+    rows = _build_receipt_payment_rows(txn, link_ref_code=10)
+
+    assert rows["ImportTaxInfo"] == []
+
+
 class _FakeSettings:
     RECEIPT_PAYMENT_SHEET_ID = "rp-sheet-id"
     DEPOSIT_WITHDRAWAL_SHEET_ID = "dw-sheet-id"
