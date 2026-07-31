@@ -101,7 +101,7 @@ def classify_transaction(
     see description_parser._parse_upi().
     """
     parsed = parse_description(description, is_credit=is_credit)
-    payee_name = parsed.payee_name or _extract_fallback_payee(description)
+    payee_name = parsed.payee_name or parsed.bank_name or _extract_fallback_payee(description)
     trusted_head = existing_head.strip() if existing_head else ""
 
     if trusted_head:
@@ -157,13 +157,17 @@ def classify_transaction(
     matched = master_repository.find_party(payee_name)
 
     if matched is None:
+        # No Master match for the extracted payee name. Instead of blocking
+        # the transaction in Review (which stalls the pipeline for IMPS
+        # narrations where the bank's "NA" placeholder leaves the payee
+        # unknown), route to receipt_payment with "Unclassified" head.
+        # The Accounts team can correct the head manually in the ERP.
         return ClassificationResult(
             is_internal=False,
             head="Unclassified",
             payee_name=payee_name,
             matched_master_row=None,
-            needs_review=True,
-            review_reason=f"No Master match for payee '{payee_name}'",
+            needs_review=False,
             bank_name=parsed.bank_name,
         )
 

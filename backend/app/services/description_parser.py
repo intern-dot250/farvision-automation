@@ -35,9 +35,33 @@ def _parse_slash_delimited(description: str) -> ParsedDescription | None:
         # IMPS/{payee name}/{account or ref}/RRN:{...}/...
         payee_candidate = tokens[1].strip() or None
         # "NA" is a placeholder meaning unknown, not an actual payee name.
-        if payee_candidate and payee_candidate.upper() == "NA":
+        # Some banks append tracking codes (e.g. "NAXXXQ675") — treat any
+        # "NA"-prefixed token as unknown.
+        if payee_candidate and payee_candidate.upper().startswith("NA"):
             payee_candidate = None
-        return ParsedDescription(payee_name=payee_candidate, ifsc=None, is_internal_format=False)
+        # When the payee slot is blank (NA placeholder), the bank name
+        # further along in the narration is a usable fallback for Master
+        # matching (e.g. "IMPS/NAXXXQ675/.../BANK OF MAHARAS/D").
+        bank_name = None
+        if payee_candidate is None:
+            # Skip reference-number tokens (RRN:/{ref}, PC:/{ref}) and bare
+            # digit/alphanumeric codes; the first multi-word token is the
+            # bank name (e.g. "BANK OF MAHARAS").
+            for t in tokens[2:]:
+                t = t.strip()
+                if not t or t.isdigit():
+                    continue
+                if IFSC_PATTERN.match(t):
+                    continue
+                if t.startswith(("RRN", "PC")):
+                    continue
+                if " " in t and len(t) > 3:
+                    bank_name = t
+                    break
+        return ParsedDescription(
+            payee_name=payee_candidate, ifsc=None,
+            is_internal_format=False, bank_name=bank_name,
+        )
 
     return None
 

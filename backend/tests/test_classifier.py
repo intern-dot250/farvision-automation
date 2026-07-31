@@ -50,7 +50,7 @@ def test_matched_payee_classified_by_parent_account_head():
     assert result.matched_master_row is not None
 
 
-def test_unmatched_external_payee_flagged_for_review():
+def test_unmatched_external_payee_routes_to_unclassified():
     with patch("app.services.classifier.master_repository.find_party") as mock_find:
         mock_find.return_value = None
 
@@ -59,9 +59,9 @@ def test_unmatched_external_payee_flagged_for_review():
         )
 
     assert result.is_internal is False
-    assert result.needs_review is True
+    assert result.needs_review is False
     assert result.head == "Unclassified"
-    assert "Unknown Payee" in result.review_reason
+    assert result.payee_name == "Unknown Payee"
 
 
 def test_existing_head_is_trusted_over_derived_label():
@@ -186,12 +186,24 @@ def test_imps_with_na_placeholder_returns_no_payee():
     assert result.payee_name is None
 
 
-def test_plain_name_description_routes_to_review_without_master_match():
-    # A plain name that doesn't match Master → review (not Internal).
+def test_imps_na_prefix_filters_unknown_payee():
+    # IMPS/NAXXXQ675 (NA-prefixed tracking codes) filters the unknown payee
+    # slot, then falls back to bank name for Master matching.
+    result = classify_transaction(
+        "IMPS/NAXXXQ675/XXXX0091/RRN:61874887784/PC04585698164489/BANK OF MAHARAS/D"
+    )
+
+    assert result.payee_name == "BANK OF MAHARAS"
+
+
+def test_plain_name_description_with_no_master_match_routes_to_unclassified():
+    # No Master match → route to receipt_payment with Unclassified head
+    # (no longer blocked in Review). The Accounts team can correct the head
+    # manually in the ERP if needed.
     with patch("app.services.classifier.master_repository.find_party", return_value=None):
         result = classify_transaction("VIJAY YADAV")
 
     assert result.is_internal is False
     assert result.payee_name == "VIJAY YADAV"
-    assert result.needs_review is True
+    assert result.needs_review is False
     assert result.head == "Unclassified"
