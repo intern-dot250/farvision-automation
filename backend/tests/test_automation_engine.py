@@ -409,6 +409,40 @@ def test_process_rows_expands_ho_business_unit():
     assert transactions[0].business_unit == "DWARKADHIS PROJECTS PVT. LTD-HO"
 
 
+def test_contractor_head_with_blank_master_description_still_routes_to_receipt_payment():
+    # Business rule: only Internal routes to Deposit/Withdrawal - every other
+    # head (Contractor included) routes to Receipt/Payment regardless of
+    # whether Master has a Description for the payee. A blank Description
+    # just means no TDS/GST ImportTaxInfo rows get built, not a block.
+    bank_rows = [
+        {
+            "SL#": "3",
+            "REFERENCE": "YESME6158000706",
+            "DESCRIPTION": "YIB-NEFT-YESME6158000706-Rajesh Kumar-HDFC0004201-Contractor-HDFC BANK",
+            "TXN DATE": "07-Jun-2026",
+            "DEBITS": "1000",
+            "CREDITS": "",
+            "BUSINESS UNIT": "Casa Romana",
+            "source_sheet": "YES AH IDW 2457",
+        }
+    ]
+
+    with patch(
+        "app.services.automation_engine.sheets_client.get_column_values",
+        return_value=set(),
+    ), patch(
+        "app.services.automation_engine.classifier.master_repository.find_party",
+        return_value={"Account Head": "Rajesh Kumar", "Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS"},
+    ):
+        transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
+
+    assert len(transactions) == 1
+    txn = transactions[0]
+    assert txn.classification.head == "Contractor"
+    assert txn.destination == "receipt_payment"
+    assert txn.review_reason is None
+
+
 def test_collection_head_routes_to_receipt_payment_not_review():
     # Collection routes to Receipt/Payment (business rule) and must not get
     # flagged for review. "NEFT Cr-{IFSC}-{Payee}-..." narrations don't

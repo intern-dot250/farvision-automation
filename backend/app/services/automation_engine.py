@@ -117,13 +117,12 @@ def _build_import_tax_info_rows(txn: TransactionRowSet, link_ref_code: int, matc
     """Contractor payments always need both a TDS row and a GST row on the
     same Link Ref Code; Vendor payments only need the GST row. Only these two
     heads need ImportTaxInfo rows at all - other heads (Collection, Imprest,
-    ...) never had TDS/GST requirements, so they don't need a Master
-    Description and must not be blocked in Review for lacking one.
+    ...) never had TDS/GST requirements.
 
-    Only emits rows when the matched Master row has a non-empty Description.
-    Returns an empty list when Description is missing — the caller in
-    _assign_rows will then reroute the transaction to Review instead of
-    writing a half-complete row."""
+    Only emits rows when the matched Master row has a non-empty Description;
+    returns an empty list otherwise (no TDS/GST rows for that transaction -
+    the transaction itself still routes to Receipt/Payment, it's just
+    missing the ImportTaxInfo detail rows)."""
     if txn.classification.head not in ("Contractor", "Vendor"):
         return []
     description = matched.get("Description", "")
@@ -419,32 +418,14 @@ def _assign_rows(transactions: list[TransactionRowSet], settings, run_id: str) -
             txn.review_reason = "; ".join(errors)
             continue
 
-        # ImportTaxInfo rows require a non-empty Description when the
-        # matched Master row exists, but only for Contractor/Vendor heads
-        # (they need TDS/GST rows) - other heads (Collection, Imprest, ...)
-        # never needed a Description and must not be blocked in Review for
-        # lacking one. Also don't route to Review when there's no Master
-        # match at all, because a trusted head (Vendor/Contractor/Imprest/
-        # etc.) plus the bank narration is sufficient to build valid
-        # Receipt/Payment rows.
-        matched = txn.classification.matched_master_row
-        if (
-            txn.destination == "receipt_payment"
-            and txn.classification.head in ("Contractor", "Vendor")
-            and not rows.get("ImportTaxInfo")
-            and matched is not None
-            and not matched.get("Description")
-        ):
-            logger.warning(f"[{run_id}] SL#{txn.sl_no} ImportTaxInfo.Description is required but empty")
-            ledger_repository.log_audit(
-                run_id, "error",
-                f"SL#{txn.sl_no} ImportTaxInfo.Description is required but empty",
-                {"reference": txn.reference},
-            )
-            txn.destination = "review"
-            txn.review_reason = "ImportTaxInfo.Description is required but empty"
-            continue
-
+        # Routing to Review is driven only by real validation failures
+        # (missing required fields, checked above) - not by a missing Master
+        # Description. Business rule: Internal head -> Deposit/Withdrawal,
+        # every other head (Contractor/Vendor/Imprest/Collection/...) ->
+        # Receipt/Payment, regardless of whether Master has a Description
+        # for the payee. When Description is missing, ImportTaxInfo simply
+        # has no TDS/GST rows for that transaction (see
+        # _build_import_tax_info_rows) rather than blocking the whole row.
         txn.rows = rows
         if txn.destination == "receipt_payment":
             rp_next_ref += 1
