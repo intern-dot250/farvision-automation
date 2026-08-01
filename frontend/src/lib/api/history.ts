@@ -10,6 +10,7 @@ export type RunSummary = {
   routed_deposit_withdrawal: number | null;
   needs_review: number | null;
   duplicates_skipped: number | null;
+  skipped_internal_credit: number | null;
 };
 
 export type LogEntry = {

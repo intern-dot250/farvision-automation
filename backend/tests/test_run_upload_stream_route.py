@@ -62,6 +62,7 @@ def _fake_stream(dry_run, rows):
             routed_receipt_payment=total,
             needs_review=0,
             duplicates_skipped=0,
+            skipped_internal_credit=0,
             transactions=[],
         ),
     }

@@ -22,6 +22,7 @@ export type RunResponse = {
   routed_receipt_payment: number;
   needs_review: number;
   duplicates_skipped: number;
+  skipped_internal_credit: number;
   transactions: TransactionSummary[];
 };
 

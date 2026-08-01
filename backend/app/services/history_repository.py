@@ -32,6 +32,7 @@ def list_runs(limit: int = 20) -> list[dict[str, Any]]:
             run["routed_deposit_withdrawal"] = context.get("routed_deposit_withdrawal")
             run["needs_review"] = context.get("needs_review")
             run["duplicates_skipped"] = context.get("duplicates_skipped")
+            run["skipped_internal_credit"] = context.get("skipped_internal_credit")
 
     ordered = sorted(runs.values(), key=lambda r: r.get("started_at") or "", reverse=True)
     return ordered[:limit]

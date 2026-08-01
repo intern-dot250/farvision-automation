@@ -786,6 +786,89 @@ def test_collection_head_routes_to_receipt_payment_not_review():
     assert txn.classification.payee_name == "ROHITAS KUMAR"
 
 
+def test_internal_credit_leg_is_skipped_not_routed_to_deposit_withdrawal():
+    # Internal transfers appear twice across the combined bank statements -
+    # once as a Debit on the sending account, once as a Credit on the
+    # receiving account. Only the Debit leg should be written to
+    # Deposit/Withdrawal; the Credit leg must be skipped entirely so the
+    # transfer isn't recorded twice.
+    bank_rows = [
+        {
+            "SL#": "1",
+            "REFERENCE": "REF-INTERNAL-1",
+            "DESCRIPTION": "YIB-TPT-DWARKADHIS PROJECTS PRIVATE LIMITED IN CIRP CR-045563200000377",
+            "TXN DATE": "22-Jul-2026",
+            "DEBITS": "",
+            "CREDITS": "50000",
+            "BUSINESS UNIT": "Casa Romana",
+            "source_sheet": "YES AH IDW 2457",
+        }
+    ]
+
+    with patch(
+        "app.services.automation_engine.sheets_client.get_column_values",
+        return_value=set(),
+    ), patch(
+        "app.services.automation_engine.classifier.master_repository.find_party",
+        return_value=None,
+    ):
+        transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
+
+    assert len(transactions) == 1
+    txn = transactions[0]
+    assert txn.classification.is_internal is True
+    assert txn.destination == "skipped_internal_credit"
+
+
+def test_internal_debit_leg_still_routes_to_deposit_withdrawal():
+    bank_rows = [
+        {
+            "SL#": "2",
+            "REFERENCE": "REF-INTERNAL-2",
+            "DESCRIPTION": "YIB-TPT-DWARKADHIS PROJECTS PRIVATE LIMITED IN CIRP CR-045563400002477",
+            "TXN DATE": "22-Jul-2026",
+            "DEBITS": "50000",
+            "CREDITS": "",
+            "BUSINESS UNIT": "Casa Romana",
+            "source_sheet": "YES AH IDW 2457",
+        }
+    ]
+
+    with patch(
+        "app.services.automation_engine.sheets_client.get_column_values",
+        return_value=set(),
+    ), patch(
+        "app.services.automation_engine.classifier.master_repository.find_party",
+        return_value=None,
+    ):
+        transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
+
+    assert len(transactions) == 1
+    txn = transactions[0]
+    assert txn.classification.is_internal is True
+    assert txn.destination == "deposit_withdrawal"
+
+
+def test_assign_rows_skips_internal_credit_leg_without_building_rows(monkeypatch):
+    # _assign_rows only builds/writes rows for "receipt_payment" and
+    # "deposit_withdrawal" destinations - "skipped_internal_credit" must
+    # fall through untouched (no rows built, nothing written).
+    txn = _internal_txn("DWARKADHIS PROJECTS PRIVATE LIMITED")
+    txn.destination = "skipped_internal_credit"
+
+    monkeypatch.setattr(
+        "app.services.automation_engine.ref_code.get_next_ref_code", lambda *a, **k: 1
+    )
+    monkeypatch.setattr(
+        "app.services.automation_engine.override_rules_repository.list_active", lambda: []
+    )
+
+    _assign_rows([txn], _FakeSettings(), run_id="test-run")
+
+    assert txn.rows == {}
+    assert txn.destination == "skipped_internal_credit"
+
+
 def test_receipt_payment_bank_name_uses_source_sheet_when_present(monkeypatch):
     # _resolve_own_bank_name calls find_bank_by_account_suffix → _load_master_df →
     # live Google Sheets. Stub the loader so the test stays offline.

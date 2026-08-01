@@ -125,7 +125,7 @@ class TransactionRowSet:
     business_unit: str
     txn_date: datetime
     classification: ClassificationResult
-    destination: str  # "deposit_withdrawal" | "receipt_payment" | "review" | "duplicate" | "error"
+    destination: str  # "deposit_withdrawal" | "receipt_payment" | "review" | "duplicate" | "error" | "skipped_internal_credit"
     destination_sheet: str | None = None  # human-readable sheet name for duplicates
     source_sheet: str | None = None  # original sheet/tab name from uploaded file
     review_reason: str | None = None
@@ -142,6 +142,7 @@ class RunResult:
     routed_receipt_payment: int
     needs_review: int
     duplicates_skipped: int
+    skipped_internal_credit: int
     transactions: list[TransactionRowSet]
 
 
@@ -425,8 +426,16 @@ def _process_rows_stream(bank_rows: list[dict], run_id: str, settings):
                     )
                 )
             else:
+                # Internal transfers appear twice across the combined bank
+                # statements - once as a Debit on the sending account, once
+                # as a Credit on the receiving account. Recording both would
+                # double the transfer in the ERP, so only the Debit leg is
+                # written to Deposit/Withdrawal; the Credit leg is skipped
+                # entirely (not written to any of the three tabs).
                 destination = (
-                    "review"
+                    "skipped_internal_credit"
+                    if classification.is_internal and debit == 0 and credit > 0
+                    else "review"
                     if classification.needs_review
                     else "deposit_withdrawal"
                     if classification.is_internal
@@ -651,6 +660,7 @@ def run_automation_stream(dry_run: bool = True, rows: list[dict] | None = None):
         routed_receipt_payment=sum(1 for t in transactions if t.destination == "receipt_payment"),
         needs_review=sum(1 for t in transactions if t.destination in ("review", "error")),
         duplicates_skipped=sum(1 for t in transactions if t.destination == "duplicate"),
+        skipped_internal_credit=sum(1 for t in transactions if t.destination == "skipped_internal_credit"),
         transactions=transactions,
     )
 
@@ -659,7 +669,8 @@ def run_automation_stream(dry_run: bool = True, rows: list[dict] | None = None):
         f"{result.routed_receipt_payment} receipt/payment, "
         f"{result.routed_deposit_withdrawal} deposit/withdrawal, "
         f"{result.needs_review} needs review, "
-        f"{result.duplicates_skipped} duplicates skipped"
+        f"{result.duplicates_skipped} duplicates skipped, "
+        f"{result.skipped_internal_credit} internal-credit legs skipped"
     )
     ledger_repository.log_audit(
         run_id, "info", "Automation run completed",
@@ -668,6 +679,7 @@ def run_automation_stream(dry_run: bool = True, rows: list[dict] | None = None):
             "routed_deposit_withdrawal": result.routed_deposit_withdrawal,
             "needs_review": result.needs_review,
             "duplicates_skipped": result.duplicates_skipped,
+            "skipped_internal_credit": result.skipped_internal_credit,
         },
     )
 

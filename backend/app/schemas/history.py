@@ -13,6 +13,7 @@ class RunSummary(BaseModel):
     routed_deposit_withdrawal: int | None = None
     needs_review: int | None = None
     duplicates_skipped: int | None = None
+    skipped_internal_credit: int | None = None
 
 
 class LogEntry(BaseModel):

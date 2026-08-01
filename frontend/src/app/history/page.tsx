@@ -52,6 +52,7 @@ export default function HistoryPage() {
                   <th className="px-3 py-2 font-medium">Deposit/Withdrawal</th>
                   <th className="px-3 py-2 font-medium">Review</th>
                   <th className="px-3 py-2 font-medium">Duplicates</th>
+                  <th className="px-3 py-2 font-medium">Internal-Credit Skipped</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
@@ -81,6 +82,9 @@ export default function HistoryPage() {
                     <td className="px-3 py-2">{run.needs_review ?? "—"}</td>
                     <td className="px-3 py-2">
                       {run.duplicates_skipped ?? "—"}
+                    </td>
+                    <td className="px-3 py-2">
+                      {run.skipped_internal_credit ?? "—"}
                     </td>
                   </tr>
                 ))}

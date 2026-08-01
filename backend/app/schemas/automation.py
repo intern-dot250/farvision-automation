@@ -23,6 +23,7 @@ class RunResponse(BaseModel):
     routed_receipt_payment: int
     needs_review: int
     duplicates_skipped: int
+    skipped_internal_credit: int
     transactions: list[TransactionSummary]
 
 

@@ -325,6 +325,9 @@ export default function DashboardPage() {
                 <Badge tone="neutral">
                   {result.duplicates_skipped} duplicates skipped
                 </Badge>
+                <Badge tone="neutral">
+                  {result.skipped_internal_credit} internal-credit legs skipped
+                </Badge>
               </div>
 
               <div className="overflow-x-auto rounded-md border border-zinc-200 dark:border-zinc-800">
@@ -359,7 +362,8 @@ export default function DashboardPage() {
                               txn.destination === "review" ||
                               txn.destination === "error"
                                 ? "warning"
-                                : txn.destination === "duplicate"
+                                : txn.destination === "duplicate" ||
+                                    txn.destination === "skipped_internal_credit"
                                   ? "neutral"
                                   : "success"
                             }

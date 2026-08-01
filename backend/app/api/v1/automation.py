@@ -19,6 +19,7 @@ def _build_run_response(result: automation_engine.RunResult) -> RunResponse:
         routed_receipt_payment=result.routed_receipt_payment,
         needs_review=result.needs_review,
         duplicates_skipped=result.duplicates_skipped,
+        skipped_internal_credit=result.skipped_internal_credit,
         transactions=[
             TransactionSummary(
                 sl_no=txn.sl_no,
