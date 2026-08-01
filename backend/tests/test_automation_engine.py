@@ -463,6 +463,195 @@ def test_non_duplicate_transaction_when_reference_absent_from_both_sheets():
     assert transactions[0].source_sheet == "YES AH IDW 2457"
 
 
+def test_narration_column_is_used_over_raw_description_when_present():
+    # The source file's own pretty-formatted NARRATION column (computed by
+    # the user's bank-statement spreadsheet) is what should end up on the
+    # ERP row - not the raw DESCRIPTION bank code.
+    pretty_narration = (
+        "Payment Disbursement (Purpose: Purchase of Material for Construction) "
+        "| To: S S Paints | Ref: YESME6182007460600 | BU: Aravali Heights | Head: Vendor"
+    )
+    bank_rows = [
+        {
+            "SL#": "1",
+            "REFERENCE": "YESME6182007460600",
+            "DESCRIPTION": "YIB-NEFT-YESME6182007460600-S S Paints-HDFC0001977-Vendor-HDFC BANK",
+            "NARRATION": pretty_narration,
+            "TXN DATE": "22-Jul-2026",
+            "DEBITS": "1000",
+            "CREDITS": "",
+            "BUSINESS UNIT": "Casa Romana",
+            "source_sheet": "YES AH IDW 2457",
+        }
+    ]
+
+    with patch(
+        "app.services.automation_engine.sheets_client.get_column_values", return_value=set()
+    ), patch(
+        "app.services.automation_engine.classifier.master_repository.find_party", return_value=None
+    ):
+        transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
+
+    assert len(transactions) == 1
+    txn = transactions[0]
+    # Classification still receives the raw DESCRIPTION - not affected by
+    # the completely different pretty-narration shape.
+    assert txn.classification.payee_name == "S S Paints"
+    assert txn.narration == pretty_narration
+    rows = _build_receipt_payment_rows(txn, link_ref_code=1)
+    assert rows["ReceiptPayment"][0]["Narration"] == pretty_narration
+
+
+def test_narration_falls_back_to_description_when_no_narration_column():
+    bank_rows = [
+        {
+            "SL#": "1",
+            "REFERENCE": "YESME6182007460600",
+            "DESCRIPTION": "YIB-NEFT-YESME6182007460600-S S Paints-HDFC0001977-Vendor-HDFC BANK",
+            "TXN DATE": "22-Jul-2026",
+            "DEBITS": "1000",
+            "CREDITS": "",
+            "BUSINESS UNIT": "Casa Romana",
+            "source_sheet": "YES AH IDW 2457",
+        }
+    ]
+
+    with patch(
+        "app.services.automation_engine.sheets_client.get_column_values", return_value=set()
+    ), patch(
+        "app.services.automation_engine.classifier.master_repository.find_party", return_value=None
+    ):
+        transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
+
+    assert transactions[0].narration == "YIB-NEFT-YESME6182007460600-S S Paints-HDFC0001977-Vendor-HDFC BANK"
+
+
+def test_duplicate_detection_matches_pretty_narration_format():
+    # A row already in the Sheet was written AFTER the switch to pretty
+    # NARRATION - the incoming transaction's own reference digits must still
+    # be found (as a substring) inside that pretty-formatted existing value.
+    existing_pretty_narration = (
+        "Payment Disbursement (Purpose: Purchase of Material for Construction) "
+        "| To: S S Paints | Ref: YESME6182007460600 | BU: Aravali Heights | Head: Vendor"
+    )
+    bank_rows = [
+        {
+            "SL#": "1",
+            "REFERENCE": "YESME6182007460600",
+            "DESCRIPTION": "YIB-NEFT-YESME6182007460600-S S Paints-HDFC0001977-Vendor-HDFC BANK",
+            "TXN DATE": "22-Jul-2026",
+            "DEBITS": "1000",
+            "CREDITS": "",
+            "BUSINESS UNIT": "Casa Romana",
+            "source_sheet": "YES AH IDW 2457",
+        }
+    ]
+
+    def fake_get_column_values(sheet_id, worksheet_name, column):
+        if worksheet_name == "ReceiptPayment":
+            return {existing_pretty_narration}
+        return set()
+
+    with patch(
+        "app.services.automation_engine.sheets_client.get_column_values",
+        side_effect=fake_get_column_values,
+    ), patch("app.services.automation_engine.ledger_repository.log_audit"), patch(
+        "app.services.automation_engine.classifier.master_repository.find_party", return_value=None
+    ):
+        transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
+
+    assert transactions[0].destination == "duplicate"
+
+
+def test_duplicate_detection_matches_old_raw_description_format():
+    # A row already in the Sheet was written BEFORE this change, in the old
+    # raw-DESCRIPTION format - backward compatibility across the transition.
+    existing_raw_narration = "YIB-NEFT-YESME6182007460600-S S Paints-HDFC0001977-Vendor-HDFC BANK"
+    bank_rows = [
+        {
+            "SL#": "1",
+            "REFERENCE": "YESME6182007460600",
+            "DESCRIPTION": "YIB-NEFT-YESME6182007460600-S S Paints-HDFC0001977-Vendor-HDFC BANK",
+            "TXN DATE": "22-Jul-2026",
+            "DEBITS": "1000",
+            "CREDITS": "",
+            "BUSINESS UNIT": "Casa Romana",
+            "source_sheet": "YES AH IDW 2457",
+        }
+    ]
+
+    def fake_get_column_values(sheet_id, worksheet_name, column):
+        if worksheet_name == "ReceiptPayment":
+            return {existing_raw_narration}
+        return set()
+
+    with patch(
+        "app.services.automation_engine.sheets_client.get_column_values",
+        side_effect=fake_get_column_values,
+    ), patch("app.services.automation_engine.ledger_repository.log_audit"), patch(
+        "app.services.automation_engine.classifier.master_repository.find_party", return_value=None
+    ):
+        transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
+
+    assert transactions[0].destination == "duplicate"
+
+
+def test_genuinely_new_reference_is_not_flagged_duplicate():
+    existing_narration = "YIB-NEFT-YESME1111111111111-Someone Else-HDFC0001977-Vendor-HDFC BANK"
+    bank_rows = [
+        {
+            "SL#": "1",
+            "REFERENCE": "YESME2222222222222",
+            "DESCRIPTION": "YIB-NEFT-YESME2222222222222-S S Paints-HDFC0001977-Vendor-HDFC BANK",
+            "TXN DATE": "22-Jul-2026",
+            "DEBITS": "1000",
+            "CREDITS": "",
+            "BUSINESS UNIT": "Casa Romana",
+            "source_sheet": "YES AH IDW 2457",
+        }
+    ]
+
+    def fake_get_column_values(sheet_id, worksheet_name, column):
+        if worksheet_name == "ReceiptPayment":
+            return {existing_narration}
+        return set()
+
+    with patch(
+        "app.services.automation_engine.sheets_client.get_column_values",
+        side_effect=fake_get_column_values,
+    ), patch(
+        "app.services.automation_engine.classifier.master_repository.find_party", return_value=None
+    ):
+        transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
+
+    assert transactions[0].destination != "duplicate"
+
+
+def test_blank_reference_never_false_positives_as_duplicate():
+    # A blank/short reference must never trivially "match" every existing
+    # row via an empty-substring false positive.
+    bank_rows = [
+        {
+            "SL#": "1",
+            "REFERENCE": "",
+            "DESCRIPTION": "POS GST",
+            "TXN DATE": "22-Jul-2026",
+            "DEBITS": "1000",
+            "CREDITS": "",
+            "BUSINESS UNIT": "Casa Romana",
+            "source_sheet": "YES AH IDW 2457",
+        }
+    ]
+
+    with patch(
+        "app.services.automation_engine.sheets_client.get_column_values",
+        return_value={"YIB-NEFT-YESME6182007460600-S S Paints-HDFC0001977-Vendor-HDFC BANK"},
+    ):
+        transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
+
+    assert transactions[0].destination != "duplicate"
+
+
 def test_process_rows_expands_ho_business_unit():
     bank_rows = [
         {

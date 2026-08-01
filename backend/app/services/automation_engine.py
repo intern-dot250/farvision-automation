@@ -97,7 +97,7 @@ def _financial_year(date: datetime) -> str:
 class TransactionRowSet:
     sl_no: str
     reference: str
-    description: str
+    description: str  # raw bank DESCRIPTION - used for classification/payee parsing only, never written to the ERP output
     debit: float
     credit: float
     business_unit: str
@@ -108,6 +108,7 @@ class TransactionRowSet:
     source_sheet: str | None = None  # original sheet/tab name from uploaded file
     review_reason: str | None = None
     rows: dict[str, list[dict]] = field(default_factory=dict)
+    narration: str = ""  # display narration written to the ERP output - the source file's own NARRATION column when present, else falls back to description
 
 
 @dataclass
@@ -212,7 +213,7 @@ def _build_receipt_payment_rows(txn: TransactionRowSet, link_ref_code: int) -> d
                 "Document Type": "RECEIPT / PAYMENT",
                 "Document Date": doc_date,
                 "Document No": "",
-                "Narration": txn.description,
+                "Narration": txn.narration,
                 "BankName": bank_name,
                 "EntryTypes": "RECEIPT / PAYMENT",
             }
@@ -276,7 +277,7 @@ def _build_deposit_withdrawal_rows(txn: TransactionRowSet, link_ref_code: int) -
             {
                 "Link Ref Code": link_ref_code,
                 "DepositWithdrawal Business Unit": txn.business_unit,
-                "DepositWithdrawal Narration": txn.description,
+                "DepositWithdrawal Narration": txn.narration,
                 "Financial Year": financial_year,
                 "Document Type": "Deposit / Withdrawal",
                 "Document Date": doc_date,
@@ -321,13 +322,18 @@ def _process_rows_stream(bank_rows: list[dict], run_id: str, settings):
     # Sheets - the Sheet is the single source of truth. A separate ledger
     # (e.g. Supabase) can silently drift from what's actually in the Sheet
     # (deleted rows, failed partial writes); reading the Sheet itself can't.
-    # Narration (not a dedicated Reference column - Farvision's format has
-    # no room for one) already carries the bank's own reference/UTR embedded
-    # in the text, so it's just as reliable a duplicate key.
+    # Matched by the transaction's own Reference/UTR digits appearing
+    # anywhere inside an existing Narration value, rather than exact-string
+    # equality - both the raw bank DESCRIPTION shape and the source file's
+    # own pretty-formatted NARRATION column (see below) embed that same
+    # reference number, just with different surrounding text, so this stays
+    # correct whether an existing row was written before or after the
+    # switch to writing the pretty NARRATION.
     rp_narrations = sheets_client.get_column_values(settings.RECEIPT_PAYMENT_SHEET_ID, "ReceiptPayment", "Narration")
     dw_narrations = sheets_client.get_column_values(
         settings.DEPOSIT_WITHDRAWAL_SHEET_ID, "DepositWithdrawal", "DepositWithdrawal Narration"
     )
+    existing_narration_digits = {master_repository._digits_only(n) for n in rp_narrations | dw_narrations}
 
     total = len(bank_rows)
     transactions = []
@@ -344,6 +350,13 @@ def _process_rows_stream(bank_rows: list[dict], run_id: str, settings):
 
         try:
             description = row.get("DESCRIPTION", "")
+            # The source file's own pretty-formatted NARRATION column
+            # (computed by the user's bank-statement spreadsheet) is what
+            # gets written to the ERP output - description stays the raw
+            # DESCRIPTION value used only for classification/payee parsing
+            # below, never written out. Falls back to description when the
+            # upload has no NARRATION column.
+            narration = str(row.get("NARRATION", "")).strip() or description
             debit = _parse_amount(str(row.get("DEBITS", "")))
             credit = _parse_amount(str(row.get("CREDITS", "")))
             txn_date = _parse_txn_date(str(row["TXN DATE"]))
@@ -353,12 +366,21 @@ def _process_rows_stream(bank_rows: list[dict], run_id: str, settings):
                 description, existing_head=existing_head, is_credit=credit > 0
             )
 
-            if description and (description in rp_narrations or description in dw_narrations):
-                logger.info(f"[{run_id}] Skipping duplicate SL#{sl_no} (narration={description})")
+            reference_digits = master_repository._digits_only(reference)
+            is_duplicate = len(reference_digits) >= 4 and any(
+                reference_digits in existing for existing in existing_narration_digits
+            )
+
+            if is_duplicate:
+                logger.info(f"[{run_id}] Skipping duplicate SL#{sl_no} (reference={reference})")
                 ledger_repository.log_audit(
                     run_id, "info", f"Skipped duplicate SL#{sl_no}", {"reference": reference}
                 )
-                original_dest = "receipt_payment" if description in rp_narrations else "deposit_withdrawal"
+                original_dest = (
+                    "receipt_payment"
+                    if any(reference_digits in master_repository._digits_only(n) for n in rp_narrations)
+                    else "deposit_withdrawal"
+                )
                 transactions.append(
                     TransactionRowSet(
                         sl_no=sl_no,
@@ -372,6 +394,7 @@ def _process_rows_stream(bank_rows: list[dict], run_id: str, settings):
                         destination="duplicate",
                         destination_sheet="receipt/payment" if original_dest == "receipt_payment" else "deposit/withdrawal",
                         source_sheet=source_sheet,
+                        narration=narration,
                     )
                 )
             else:
@@ -402,6 +425,7 @@ def _process_rows_stream(bank_rows: list[dict], run_id: str, settings):
                         classification=classification,
                         destination=destination,
                         source_sheet=source_sheet,
+                        narration=narration,
                     )
                 )
         except Exception as exc:
@@ -425,6 +449,7 @@ def _process_rows_stream(bank_rows: list[dict], run_id: str, settings):
                     destination="error",
                     review_reason=str(exc),
                     source_sheet=source_sheet,
+                    narration=str(row.get("NARRATION", "")).strip() or str(row.get("DESCRIPTION", "")),
                 )
             )
 
