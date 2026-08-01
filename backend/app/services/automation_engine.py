@@ -109,6 +109,76 @@ def _resolve_counterparty_bank_name(counterparty_account: str | None, matched_ma
     return matched_master.get("Bank Name") or payee_name or "Internal Transfer"
 
 
+def _compute_narration_from_formula(row: dict, own_bank_name: str) -> str:
+    """Replicates the accounts team's NARRATION spreadsheet formula for the
+    two branches verified against real data (Internal-head transfers, and
+    Payment Disbursement for non-Internal debits) - used as a fallback when
+    the uploaded file's own NARRATION cell is blank, see
+    _process_rows_stream. own_bank_name is that tab's own label from the
+    formula (e.g. "YES CR FREE 2477"), passed in as the uppercased source
+    sheet name.
+
+    The Receipt Credit (non-Internal, credit-side - e.g. Collection) branch
+    is deliberately NOT implemented here: a real example on a different tab
+    (YES Master 0264) showed a completely different narration format for
+    that case ("Receipt: For (Apt#: ...) (Ref: ...) ...", not the
+    pipe-separated "Receipt Credit from x..." shape given for YES CR Free
+    2477), so it isn't safe to assume one formula covers it - returns ""
+    for that case, so the caller falls back to the raw description exactly
+    as before rather than risk writing a confidently wrong narration.
+
+    RIGHT(MID(description, position-of-3rd-dash + 1, LEN(description)), 4)
+    in the original formula simplifies to just the last 4 characters of
+    description (MID-to-end-of-string then RIGHT(4) collapses to that)."""
+    description = str(row.get("DESCRIPTION", "")).strip()
+    reference = str(row.get("REFERENCE", "")).strip()
+    credits = _parse_amount(str(row.get("CREDITS", "")))
+    business_unit = str(row.get("BUSINESS UNIT", "")).strip()
+    head = str(row.get("HEAD", "")).strip()
+    type_for_rera_idw = str(row.get("TYPE FOR RERA IDW", "")).strip()
+    apt = str(row.get("APT#", "")).strip()
+    acc_remarks = str(row.get("ACC REMARKS", "")).strip()
+
+    ref = reference or "N/A"
+    apt_suffix = f" | Apt: {apt}" if apt else ""
+
+    if not acc_remarks:
+        return "Remarks Compulsory For Narration"
+
+    is_credit = credits > 0
+    last4 = description[-4:]
+
+    if head == "Internal":
+        # The formula gates this on DESCRIPTION having 3+ dashes, but a real
+        # example (an IMPS/-delimited, zero-dash description) still produces
+        # this full "From X to Y" form in the live sheet - so this is always
+        # attempted for Internal-head rows, not gated on delimiter shape.
+        if is_credit:
+            transfer = f"Internal Fund Transfer (From x{last4} to {own_bank_name})"
+        else:
+            transfer = f"Internal Fund Transfer (From {own_bank_name} to x{last4})"
+        text = f"{transfer} | Ref: {ref} | Type: {type_for_rera_idw} | BU: {business_unit} | Head: {head}"
+    elif is_credit:
+        # Not implemented - see docstring. Falls back to raw description.
+        return ""
+    else:
+        purpose = "Salary" if "salary" in head.lower() else acc_remarks
+        slash_parts = description.split("/")
+        dash_parts = description.split("-")
+        # Formula's IFERROR chain: 4th "/"-segment, else 4th "-"-segment,
+        # else the raw description - only valid if enough delimiters exist
+        # (mirrors FIND() erroring when a delimiter position doesn't exist).
+        if len(slash_parts) >= 6:
+            to = slash_parts[4]
+        elif len(dash_parts) >= 5:
+            to = dash_parts[3]
+        else:
+            to = description
+        text = f"Payment Disbursement (Purpose: {purpose}) | To: {to} | Ref: {ref} | BU: {business_unit} | Head: {head}{apt_suffix}"
+
+    return " ".join(text.split())  # TRIM() equivalent - collapses all whitespace runs
+
+
 def _financial_year(date: datetime) -> str:
     """Indian fiscal year: April 1 - March 31."""
     start_year = date.year if date.month >= 4 else date.year - 1
@@ -382,9 +452,15 @@ def _process_rows_stream(bank_rows: list[dict], run_id: str, settings):
             # (computed by the user's bank-statement spreadsheet) is what
             # gets written to the ERP output - description stays the raw
             # DESCRIPTION value used only for classification/payee parsing
-            # below, never written out. Falls back to description when the
-            # upload has no NARRATION column.
-            narration = str(row.get("NARRATION", "")).strip() or description
+            # below, never written out. When the file's NARRATION cell is
+            # blank (e.g. the accounts team's formula hadn't recalculated
+            # yet at export time), compute it ourselves via the same
+            # formula rather than falling straight to the raw description.
+            narration = (
+                str(row.get("NARRATION", "")).strip()
+                or _compute_narration_from_formula(row, source_sheet.upper() if source_sheet else "")
+                or description
+            )
             debit = _parse_amount(str(row.get("DEBITS", "")))
             credit = _parse_amount(str(row.get("CREDITS", "")))
             txn_date = _parse_txn_date(str(row["TXN DATE"]))

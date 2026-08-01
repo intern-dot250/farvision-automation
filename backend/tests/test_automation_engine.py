@@ -7,6 +7,7 @@ from app.services.automation_engine import (
     _assign_rows,
     _build_deposit_withdrawal_rows,
     _build_receipt_payment_rows,
+    _compute_narration_from_formula,
     _distinct_sheet_names,
     _format_amount,
     _normalize_business_unit,
@@ -538,7 +539,12 @@ def test_narration_column_is_used_over_raw_description_when_present():
     assert rows["ReceiptPayment"][0]["Narration"] == pretty_narration
 
 
-def test_narration_falls_back_to_description_when_no_narration_column():
+def test_narration_computes_payment_disbursement_when_narration_column_blank():
+    # No NARRATION column, but ACC REMARKS/HEAD/etc are present - the
+    # formula-replication fallback should compute the pretty narration
+    # itself now, rather than falling straight to raw description (real
+    # example verified against C:/Users/Win11-A/Desktop/DPL Bank Statements
+    # 2026-27.xlsx, YES AH IDW 2457 tab, Ref YESME6182007460600).
     bank_rows = [
         {
             "SL#": "1",
@@ -547,7 +553,10 @@ def test_narration_falls_back_to_description_when_no_narration_column():
             "TXN DATE": "22-Jul-2026",
             "DEBITS": "1000",
             "CREDITS": "",
-            "BUSINESS UNIT": "Casa Romana",
+            "BUSINESS UNIT": "Aravali Heights",
+            "HEAD": "Vendor",
+            "TYPE FOR RERA IDW": "Dev- Apt",
+            "ACC REMARKS": "Purchase of Material for Construction",
             "source_sheet": "YES AH IDW 2457",
         }
     ]
@@ -559,7 +568,165 @@ def test_narration_falls_back_to_description_when_no_narration_column():
     ):
         transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
 
-    assert transactions[0].narration == "YIB-NEFT-YESME6182007460600-S S Paints-HDFC0001977-Vendor-HDFC BANK"
+    assert transactions[0].narration == (
+        "Payment Disbursement (Purpose: Purchase of Material for Construction) "
+        "| To: S S Paints | Ref: YESME6182007460600 | BU: Aravali Heights | Head: Vendor"
+    )
+
+
+def test_narration_falls_back_to_description_when_computed_narration_also_empty():
+    # No NARRATION column, and the row is a credit-side non-Internal
+    # transaction (Collection) - _compute_narration_from_formula
+    # deliberately doesn't handle that case (real narration format proven to
+    # differ by tab - see YES Master 0264), so this must still fall through
+    # to the raw description as the final safety net, same as before.
+    bank_rows = [
+        {
+            "SL#": "1",
+            "REFERENCE": "YES0N6202072677900",
+            "DESCRIPTION": "NEFT Cr-ICIC0SF0002-HARI KISHAN-DWARKADHIS PROJECTS PRIVA-IN12620247274271",
+            "TXN DATE": "22-Jul-2026",
+            "DEBITS": "",
+            "CREDITS": "70000",
+            "BUSINESS UNIT": "Casa Romana",
+            "HEAD": "Collection",
+            "TYPE FOR RERA IDW": "Customer Collection",
+            "ACC REMARKS": "Customer Collection",
+            "source_sheet": "YES Master 0264",
+        }
+    ]
+
+    with patch(
+        "app.services.automation_engine.sheets_client.get_column_values", return_value=set()
+    ), patch(
+        "app.services.automation_engine.classifier.master_repository.find_party", return_value=None
+    ):
+        transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
+
+    assert transactions[0].narration == "NEFT Cr-ICIC0SF0002-HARI KISHAN-DWARKADHIS PROJECTS PRIVA-IN12620247274271"
+
+
+def test_compute_narration_formula_internal_debit_dash_shaped_description():
+    # Real example verified against Desktop DPL Bank Statements 2026-27.xlsx,
+    # YES AH IDW 2457 tab, Ref YESME6202001955300.
+    row = {
+        "DESCRIPTION": "YIB-TPT-DWARKADHIS PROJECTS PVT LTD IN CIRP ARAVALI HEIGHTS-internal-045563400002314",
+        "REFERENCE": "YESME6202001955300",
+        "DEBITS": "100000",
+        "CREDITS": "",
+        "BUSINESS UNIT": "Aravali Heights",
+        "HEAD": "Internal",
+        "TYPE FOR RERA IDW": "Internal",
+        "ACC REMARKS": "N/A",
+    }
+
+    result = _compute_narration_from_formula(row, "YES AH IDW 2457")
+
+    assert result == (
+        "Internal Fund Transfer (From YES AH IDW 2457 to x2314) "
+        "| Ref: YESME6202001955300 | Type: Internal | BU: Aravali Heights | Head: Internal"
+    )
+
+
+def test_compute_narration_formula_internal_debit_slash_shaped_description():
+    # Real example verified against the same file, Ref YESI66187010622500 -
+    # an IMPS/-delimited description with zero dashes still produces the
+    # full "From X to Y" form in the live sheet (not gated on dash count).
+    row = {
+        "DESCRIPTION": "IMPS/NA/XXXX9675/RRN:618748887784/PC408545856194489/BANK OF MAHARAS/Dwarkadhis Projects Pvt Ltd/For TDSBOM9675",
+        "REFERENCE": "YESI66187010622500",
+        "DEBITS": "1000",
+        "CREDITS": "",
+        "BUSINESS UNIT": "Aravali Heights",
+        "HEAD": "Internal",
+        "TYPE FOR RERA IDW": "Internal",
+        "ACC REMARKS": "N/A",
+    }
+
+    result = _compute_narration_from_formula(row, "YES AH IDW 2457")
+
+    assert result == (
+        "Internal Fund Transfer (From YES AH IDW 2457 to x9675) "
+        "| Ref: YESI66187010622500 | Type: Internal | BU: Aravali Heights | Head: Internal"
+    )
+
+
+def test_compute_narration_formula_internal_credit_side():
+    row = {
+        "DESCRIPTION": "YIB-TPT-DWARKADHIS PROJECTS PVT LTD IN CIRP-045563200000377",
+        "REFERENCE": "YESME6100000000000",
+        "DEBITS": "",
+        "CREDITS": "50000",
+        "BUSINESS UNIT": "Casa Romana",
+        "HEAD": "Internal",
+        "TYPE FOR RERA IDW": "Internal",
+        "ACC REMARKS": "N/A",
+    }
+
+    result = _compute_narration_from_formula(row, "YES CR FREE 2477")
+
+    assert result == (
+        "Internal Fund Transfer (From x0377 to YES CR FREE 2477) "
+        "| Ref: YESME6100000000000 | Type: Internal | BU: Casa Romana | Head: Internal"
+    )
+
+
+def test_compute_narration_formula_payment_disbursement_debit():
+    # Real example - see test_narration_computes_payment_disbursement_when_narration_column_blank.
+    row = {
+        "DESCRIPTION": "YIB-NEFT-YESME6182007460600-S S Paints-HDFC0001977-Vendor-HDFC BANK",
+        "REFERENCE": "YESME6182007460600",
+        "DEBITS": "1083",
+        "CREDITS": "",
+        "BUSINESS UNIT": "Aravali Heights",
+        "HEAD": "Vendor",
+        "TYPE FOR RERA IDW": "Dev- Apt",
+        "ACC REMARKS": "Purchase of Material for Construction",
+    }
+
+    result = _compute_narration_from_formula(row, "YES AH IDW 2457")
+
+    assert result == (
+        "Payment Disbursement (Purpose: Purchase of Material for Construction) "
+        "| To: S S Paints | Ref: YESME6182007460600 | BU: Aravali Heights | Head: Vendor"
+    )
+
+
+def test_compute_narration_formula_receipt_credit_not_implemented():
+    # Deliberately unimplemented - real data proved the format isn't
+    # uniform across tabs (see YES Master 0264) - returns "" so the caller
+    # falls back to raw description instead of guessing.
+    row = {
+        "DESCRIPTION": "NEFT Cr-ICIC0SF0002-HARI KISHAN-DWARKADHIS PROJECTS PRIVA-IN12620247274271",
+        "REFERENCE": "YES0N6202072677900",
+        "DEBITS": "",
+        "CREDITS": "70000",
+        "BUSINESS UNIT": "Casa Romana",
+        "HEAD": "Collection",
+        "TYPE FOR RERA IDW": "Customer Collection",
+        "ACC REMARKS": "Customer Collection",
+    }
+
+    result = _compute_narration_from_formula(row, "YES Master 0264")
+
+    assert result == ""
+
+
+def test_compute_narration_formula_blank_acc_remarks_returns_placeholder():
+    row = {
+        "DESCRIPTION": "YIB-NEFT-YESME9999999999-Some Vendor-HDFC0001977-Vendor-HDFC BANK",
+        "REFERENCE": "YESME9999999999",
+        "DEBITS": "500",
+        "CREDITS": "",
+        "BUSINESS UNIT": "Casa Romana",
+        "HEAD": "Vendor",
+        "TYPE FOR RERA IDW": "Dev- Apt",
+        "ACC REMARKS": "",
+    }
+
+    result = _compute_narration_from_formula(row, "YES AH IDW 2457")
+
+    assert result == "Remarks Compulsory For Narration"
 
 
 def test_duplicate_detection_matches_pretty_narration_format():
