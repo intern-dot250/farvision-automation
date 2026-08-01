@@ -8,13 +8,29 @@ REQUIRED_FIELDS: dict[str, list[str]] = {
     "LedgerDetails": ["Link Ref Code", "Debit/Credit", "Account Head", "Parent Account Head", "Payment Mode", "Payee Name"],
 }
 
+# DepositWithdrawal's LedgerDetails has no Parent Account Head concept for
+# internal transfers - it's left blank by design (see
+# automation_engine.py _build_deposit_withdrawal_rows). Only
+# Receipt/Payment's LedgerDetails still requires it.
+_DEPOSIT_WITHDRAWAL_LEDGER_DETAILS_REQUIRED_FIELDS = [
+    field for field in REQUIRED_FIELDS["LedgerDetails"] if field != "Parent Account Head"
+]
+
 
 def validate_rows(rows: dict[str, list[dict]]) -> list[str]:
-    """Check constructed rows against required fields. Returns error messages (empty = valid)."""
+    """Check constructed rows against required fields. Returns error messages
+    (empty = valid). `rows` only ever comes from one builder at a time
+    (_build_receipt_payment_rows or _build_deposit_withdrawal_rows), so the
+    presence of a "DepositWithdrawal" key reliably identifies which
+    LedgerDetails required-field set applies."""
     errors: list[str] = []
+    is_deposit_withdrawal = "DepositWithdrawal" in rows
 
     for tab, tab_rows in rows.items():
-        required = REQUIRED_FIELDS.get(tab, [])
+        if tab == "LedgerDetails" and is_deposit_withdrawal:
+            required = _DEPOSIT_WITHDRAWAL_LEDGER_DETAILS_REQUIRED_FIELDS
+        else:
+            required = REQUIRED_FIELDS.get(tab, [])
         for row in tab_rows:
             for field in required:
                 value = row.get(field)
