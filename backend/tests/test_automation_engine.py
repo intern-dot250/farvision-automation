@@ -69,6 +69,7 @@ def _internal_txn(
     payee_name: str | None,
     matched_master_row: dict | None = None,
     bank_name: str | None = None,
+    counterparty_account: str | None = None,
 ) -> TransactionRowSet:
     return TransactionRowSet(
         sl_no="1",
@@ -85,6 +86,7 @@ def _internal_txn(
             matched_master_row=matched_master_row,
             needs_review=False,
             bank_name=bank_name,
+            counterparty_account=counterparty_account,
         ),
         destination="deposit_withdrawal",
     )
@@ -95,9 +97,11 @@ def test_deposit_withdrawal_uses_extracted_entity_name_as_payee():
 
     ledger = rows["LedgerDetails"][0]
     assert ledger["Payee Name"] == "DWARKADHIS PROJECTS PRIVATE LIMITED"
-    # Head stays the category label regardless of the extracted name.
-    assert ledger["Account Head"] == "Internal Transfer"
-    assert ledger["Parent Account Head"] == "Internal Transfer"
+    # No counterparty_account and no Master Bank Name -> Account Head falls
+    # back to the extracted payee name (last resort before "Internal Transfer").
+    assert ledger["Account Head"] == "DWARKADHIS PROJECTS PRIVATE LIMITED"
+    # Parent Account Head has no equivalent concept for internal transfers.
+    assert ledger["Parent Account Head"] == ""
 
 
 def test_deposit_withdrawal_falls_back_to_generic_label_when_no_name_extracted():
@@ -105,6 +109,38 @@ def test_deposit_withdrawal_falls_back_to_generic_label_when_no_name_extracted()
 
     ledger = rows["LedgerDetails"][0]
     assert ledger["Payee Name"] == "Internal Transfer"
+    # No payee name, no counterparty_account, no Master Bank Name -> the
+    # final fallback, literal "Internal Transfer".
+    assert ledger["Account Head"] == "Internal Transfer"
+
+
+def test_deposit_withdrawal_account_head_resolves_counterparty_full_account(monkeypatch):
+    from app.services import master_repository
+
+    df = pd.DataFrame.from_records(
+        [{"Bank Name": "YES BANK CR FREE 045563400002477"}]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    txn = _internal_txn("DWARKADHIS PROJECTS PVT LTD", counterparty_account="045563400002477")
+    rows = _build_deposit_withdrawal_rows(txn, link_ref_code=1)
+
+    assert rows["LedgerDetails"][0]["Account Head"] == "YES BANK CR FREE 045563400002477"
+
+
+def test_deposit_withdrawal_account_head_falls_back_to_master_bank_name_when_no_suffix_match(monkeypatch):
+    from app.services import master_repository
+
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: pd.DataFrame(columns=["Bank Name"]))
+
+    txn = _internal_txn(
+        "DWARKADHIS PROJECTS PVT LTD",
+        matched_master_row={"Bank Name": "UBI ESCROW A/C CR- 497801010000168"},
+        counterparty_account="999999999999999",
+    )
+    rows = _build_deposit_withdrawal_rows(txn, link_ref_code=1)
+
+    assert rows["LedgerDetails"][0]["Account Head"] == "UBI ESCROW A/C CR- 497801010000168"
 
 
 def test_deposit_withdrawal_bank_name_comes_from_master_first():

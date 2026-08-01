@@ -87,6 +87,28 @@ def _resolve_own_bank_name(source_sheet, matched_master, narration_bank) -> str:
     return matched_master.get("Bank Name") or narration_bank or ""
 
 
+def _resolve_counterparty_bank_name(counterparty_account: str | None, matched_master: dict, payee_name: str | None) -> str:
+    """Resolve the Account Head value for a Deposit/Withdrawal (internal
+    transfer) row - the full account name/number of whichever side of the
+    transfer is NOT our own account, mirroring _resolve_own_bank_name's
+    suffix-matching pattern but applied to the counterparty side instead.
+
+    counterparty_account comes from a TPT-shaped narration's embedded
+    destination account number (description_parser.py). When it's absent
+    (a minority of internal-transfer narration shapes have no embedded
+    account number to extract) or has no matching Master suffix, fall back
+    to Master's Bank Name for the matched payee, then the payee name itself,
+    then the literal "Internal Transfer" as the last resort - Account Head
+    is never left blank."""
+    if counterparty_account:
+        suffix = master_repository._last_n_digits(counterparty_account, 4)
+        if suffix:
+            full = master_repository.find_bank_by_account_suffix(suffix)
+            if full:
+                return full
+    return matched_master.get("Bank Name") or payee_name or "Internal Transfer"
+
+
 def _financial_year(date: datetime) -> str:
     """Indian fiscal year: April 1 - March 31."""
     start_year = date.year if date.month >= 4 else date.year - 1
@@ -271,6 +293,9 @@ def _build_deposit_withdrawal_rows(txn: TransactionRowSet, link_ref_code: int) -
     bank_name = _resolve_own_bank_name(
         txn.source_sheet, matched, txn.classification.bank_name
     )
+    counterparty_bank_name = _resolve_counterparty_bank_name(
+        txn.classification.counterparty_account, matched, txn.classification.payee_name
+    )
 
     return {
         "DepositWithdrawal": [
@@ -291,11 +316,13 @@ def _build_deposit_withdrawal_rows(txn: TransactionRowSet, link_ref_code: int) -
             {
                 "Link Ref Code": link_ref_code,
                 "Debit/Credit": debit_credit,
-                # Head stays the category label ("Internal Transfer") even
-                # though Payee Name below may show the actual counterparty -
-                # no Master match/category exists for internal transfers.
-                "Account Head": "Internal Transfer",
-                "Parent Account Head": "Internal Transfer",
+                # Account Head shows the counterparty's full account
+                # name/number (the other side of the internal transfer, not
+                # our own account) - see _resolve_counterparty_bank_name.
+                # Parent Account Head has no equivalent concept for internal
+                # transfers, so it's left blank rather than a placeholder.
+                "Account Head": counterparty_bank_name,
+                "Parent Account Head": "",
                 "Debit Amount": _format_amount(txn.debit),
                 "Credit Amount": _format_amount(txn.credit),
                 "Payment Mode": "Net Banking",

@@ -14,6 +14,7 @@ class ClassificationResult:
     needs_review: bool
     review_reason: str | None = None
     bank_name: str | None = None
+    counterparty_account: str | None = None  # destination account number for TPT-shaped internal transfers
 
 
 def _derive_head(master_row: dict) -> str:
@@ -126,6 +127,7 @@ def classify_transaction(
                 matched_master_row=internal_matched,
                 needs_review=False,
                 bank_name=parsed.bank_name,
+                counterparty_account=parsed.counterparty_account,
             )
 
         # A trusted, non-Internal head from the statement (Contractor/Vendor/
@@ -152,6 +154,7 @@ def classify_transaction(
             matched_master_row=internal_matched,
             needs_review=False,
             bank_name=parsed.bank_name,
+            counterparty_account=parsed.counterparty_account,
         )
 
     matched = master_repository.find_party(payee_name)

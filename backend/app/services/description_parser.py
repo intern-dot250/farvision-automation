@@ -10,6 +10,7 @@ class ParsedDescription:
     ifsc: str | None
     is_internal_format: bool
     bank_name: str | None = None
+    counterparty_account: str | None = None  # destination account number embedded in a TPT-shaped internal-transfer narration
 
 
 def _parse_slash_delimited(description: str) -> ParsedDescription | None:
@@ -139,7 +140,16 @@ def parse_description(description: str, is_credit: bool | None = None) -> Parsed
         # classifier's fallback payee extraction can try.
         if len(tokens) >= 4 and tokens[1].strip().upper() == "TPT":
             internal_name = tokens[2].strip() or None
-            return ParsedDescription(payee_name=internal_name, ifsc=None, is_internal_format=True)
+            # The last token is often the counterparty's full account number
+            # (e.g. "...-tfr-045563400002477") - only treat it as one when
+            # it's a bare digit string, so unrelated trailing text elsewhere
+            # doesn't get misread as an account number.
+            last_token = tokens[-1].strip()
+            counterparty_account = last_token if last_token.isdigit() else None
+            return ParsedDescription(
+                payee_name=internal_name, ifsc=None, is_internal_format=True,
+                counterparty_account=counterparty_account,
+            )
         return ParsedDescription(payee_name=None, ifsc=None, is_internal_format=False)
 
     if ifsc_index < 3:

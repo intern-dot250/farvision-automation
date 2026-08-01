@@ -13,6 +13,7 @@ def test_internal_transfer_classified_as_internal():
     assert result.head == "Internal"
     assert result.needs_review is False
     assert result.payee_name == "DWARKADHIS PROJECTS PRIVATE LIMITED IN CIRP CR"
+    assert result.counterparty_account == "045563200000377"
 
 
 def test_internal_transfer_still_looks_up_master_for_bank_name():
