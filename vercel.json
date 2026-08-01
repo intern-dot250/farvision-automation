@@ -9,10 +9,5 @@
   ],
   "routes": [
     { "src": "/api/v1/(.*)", "dest": "backend/api/index.py" }
-  ],
-  "functions": {
-    "backend/api/index.py": {
-      "maxDuration": 60
-    }
-  }
+  ]
 }
