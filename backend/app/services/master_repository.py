@@ -72,6 +72,25 @@ def _last_n_digits(value: str, n: int) -> str | None:
     return None
 
 
+@lru_cache
+def _bank_name_suffix_index(n: int) -> dict[str, str]:
+    """Precomputed {last-N-digit account suffix: full Bank Name}, built once
+    per Master load (see _load_master_df) instead of re-scanning all of
+    Master's Bank Name column on every find_bank_by_account_suffix() call -
+    that per-call rescan (over 15k+ rows) was a major cost of a real-sized
+    run. Keyed by n since a caller could in principle ask for a different
+    suffix length, though both current callers always use 4."""
+    df = _load_master_df()
+    index: dict[str, str] = {}
+    if "Bank Name" not in df.columns:
+        return index
+    for value in df["Bank Name"].astype(str):
+        suffix = _last_n_digits(value, n)
+        if suffix and suffix not in index:
+            index[suffix] = value
+    return index
+
+
 def find_bank_by_account_suffix(suffix: str) -> str | None:
     """Find a Master row whose "Bank Name" contains an account number whose
     last N digits match `suffix`. Returns the full "Bank Name" value from
@@ -85,17 +104,7 @@ def find_bank_by_account_suffix(suffix: str) -> str | None:
     if not suffix or not suffix.isdigit() or len(suffix) < 4:
         return None
 
-    df = _load_master_df()
-    if "Bank Name" not in df.columns:
-        return None
-
-    # Extract trailing N digits from each Bank Name value and compare as strings
-    bank_series = df["Bank Name"].astype(str)
-    extracted = bank_series.apply(lambda v: _last_n_digits(v, len(suffix)))
-    matches = df[extracted == suffix]
-    if matches.empty:
-        return None
-    return str(matches.iloc[0]["Bank Name"])
+    return _bank_name_suffix_index(len(suffix)).get(suffix)
 
 
 @lru_cache
@@ -103,6 +112,41 @@ def _load_master_df() -> pd.DataFrame:
     settings = get_settings()
     records = sheets_client.read_all_records(settings.STATEMENT_MASTER_SHEET_ID, MASTER_WORKSHEET)
     return pd.DataFrame.from_records(records)
+
+
+@lru_cache
+def _normalized_column(column: str) -> pd.Series | None:
+    """Normalized version of a Master column, built once per Master load and
+    reused across every lookup - see find_party/_category_rows, which used
+    to rebuild this (a Python-level .apply() over 15k+ rows) on every call."""
+    df = _load_master_df()
+    if column not in df.columns:
+        return None
+    return df[column].astype(str).apply(_normalize)
+
+
+@lru_cache
+def _stripped_column(column: str) -> pd.Series | None:
+    normalized = _normalized_column(column)
+    if normalized is None:
+        return None
+    return normalized.apply(_strip_master_suffix)
+
+
+@lru_cache
+def _canonical_column(column: str) -> pd.Series | None:
+    normalized = _normalized_column(column)
+    if normalized is None:
+        return None
+    return normalized.apply(_canonical)
+
+
+@lru_cache
+def _canonical_stripped_column(column: str) -> pd.Series | None:
+    stripped = _stripped_column(column)
+    if stripped is None:
+        return None
+    return stripped.apply(_canonical)
 
 
 def find_party(payee_name: str | None) -> dict | None:
@@ -120,12 +164,12 @@ def find_party(payee_name: str | None) -> dict | None:
     canonical_key = _canonical(key)
 
     for column in _LOOKUP_COLUMNS:
-        if column not in df.columns:
+        normalized = _normalized_column(column)
+        if normalized is None:
             continue
-        normalized = df[column].astype(str).apply(_normalize)
-        stripped = normalized.apply(_strip_master_suffix)
-        canonical_normalized = normalized.apply(_canonical)
-        canonical_stripped = stripped.apply(_canonical)
+        stripped = _stripped_column(column)
+        canonical_normalized = _canonical_column(column)
+        canonical_stripped = _canonical_stripped_column(column)
         match = df[
             (normalized == key)
             | (stripped == key)
@@ -156,7 +200,9 @@ def _category_rows(account_head: str | None, parent_account_head: str | None) ->
         if not value or column not in df.columns:
             continue
         key = _normalize(str(value))
-        normalized_column = df[column].astype(str).apply(_normalize)
+        normalized_column = _normalized_column(column)
+        if normalized_column is None:
+            continue
         matches = df[has_data & (normalized_column == key)]
         if not matches.empty:
             return matches
@@ -206,3 +252,8 @@ def find_deduction_for_head(
 def clear_cache() -> None:
     """Force the next lookup to re-fetch Master from Sheets (e.g. after edits)."""
     _load_master_df.cache_clear()
+    _normalized_column.cache_clear()
+    _stripped_column.cache_clear()
+    _canonical_column.cache_clear()
+    _canonical_stripped_column.cache_clear()
+    _bank_name_suffix_index.cache_clear()
