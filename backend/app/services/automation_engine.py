@@ -123,9 +123,13 @@ def _compute_narration_from_formula(row: dict, own_bank_name: str) -> str:
     (YES Master 0264) showed a completely different narration format for
     that case ("Receipt: For (Apt#: ...) (Ref: ...) ...", not the
     pipe-separated "Receipt Credit from x..." shape given for YES CR Free
-    2477), so it isn't safe to assume one formula covers it - returns ""
-    for that case, so the caller falls back to the raw description exactly
-    as before rather than risk writing a confidently wrong narration.
+    2477), so it isn't safe to assume one formula covers it. Same for a row
+    missing ACC REMARKS (the formula's own required field for every branch):
+    rather than surface a hardcoded "Remarks Compulsory For Narration"
+    placeholder on the dashboard, this returns "" for both cases so the
+    caller falls back to the real raw description instead - never a
+    fabricated message, same treatment as every other case where nothing
+    computable is available.
 
     RIGHT(MID(description, position-of-3rd-dash + 1, LEN(description)), 4)
     in the original formula simplifies to just the last 4 characters of
@@ -143,7 +147,7 @@ def _compute_narration_from_formula(row: dict, own_bank_name: str) -> str:
     apt_suffix = f" | Apt: {apt}" if apt else ""
 
     if not acc_remarks:
-        return "Remarks Compulsory For Narration"
+        return ""
 
     is_credit = credits > 0
     last4 = description[-4:]

@@ -712,7 +712,10 @@ def test_compute_narration_formula_receipt_credit_not_implemented():
     assert result == ""
 
 
-def test_compute_narration_formula_blank_acc_remarks_returns_placeholder():
+def test_compute_narration_formula_blank_acc_remarks_returns_empty():
+    # ACC REMARKS is required by the formula's own logic, but the dashboard
+    # must never show a fabricated placeholder - returns "" so the caller
+    # falls back to the real raw description instead.
     row = {
         "DESCRIPTION": "YIB-NEFT-YESME9999999999-Some Vendor-HDFC0001977-Vendor-HDFC BANK",
         "REFERENCE": "YESME9999999999",
@@ -726,7 +729,7 @@ def test_compute_narration_formula_blank_acc_remarks_returns_placeholder():
 
     result = _compute_narration_from_formula(row, "YES AH IDW 2457")
 
-    assert result == "Remarks Compulsory For Narration"
+    assert result == ""
 
 
 def test_duplicate_detection_matches_pretty_narration_format():
