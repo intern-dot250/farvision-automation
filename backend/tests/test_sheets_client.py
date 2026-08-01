@@ -266,3 +266,57 @@ def test_append_records_raises_for_unknown_sheet_with_missing_header(monkeypatch
     except ValueError as exc:
         assert "MysteryTab" in str(exc)
     mock_ws.append_rows.assert_not_called()
+
+
+def test_read_all_records_restores_missing_header_for_receipt_payment(monkeypatch):
+    monkeypatch.setattr(sheets_client, "get_settings", lambda: _FakeSettings())
+    mock_ws = _mock_ws_with_empty_header()
+    mock_ws.get_all_records.return_value = []
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    result = sheets_client.read_all_records("rp-sheet-id", "ReceiptPayment")
+
+    mock_ws.update.assert_called_once()
+    _, kwargs = mock_ws.update.call_args
+    assert kwargs["values"][0] == sheets_client._RECEIPT_PAYMENT_HEADERS["ReceiptPayment"]
+    mock_ws.get_all_records.assert_called_once()
+    assert result == []
+
+
+def test_read_all_records_restores_missing_header_for_deposit_withdrawal(monkeypatch):
+    monkeypatch.setattr(sheets_client, "get_settings", lambda: _FakeSettings())
+    mock_ws = _mock_ws_with_empty_header()
+    mock_ws.get_all_records.return_value = []
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    result = sheets_client.read_all_records("dw-sheet-id", "DepositWithdrawal")
+
+    mock_ws.update.assert_called_once()
+    _, kwargs = mock_ws.update.call_args
+    assert kwargs["values"][0] == sheets_client._DEPOSIT_WITHDRAWAL_HEADERS["DepositWithdrawal"]
+    assert result == []
+
+
+def test_read_all_records_does_not_touch_header_when_already_present(monkeypatch):
+    monkeypatch.setattr(sheets_client, "get_settings", lambda: _FakeSettings())
+    mock_ws = _make_mock_ws()
+    mock_ws.get_all_records.return_value = [{"Link Ref Code": "1"}]
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    result = sheets_client.read_all_records("rp-sheet-id", "ReceiptPayment")
+
+    mock_ws.update.assert_not_called()
+    assert result == [{"Link Ref Code": "1"}]
+
+
+def test_read_all_records_raises_for_unknown_sheet_with_missing_header(monkeypatch):
+    monkeypatch.setattr(sheets_client, "get_settings", lambda: _FakeSettings())
+    mock_ws = _mock_ws_with_empty_header()
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    try:
+        sheets_client.read_all_records("some-other-sheet-id", "MysteryTab")
+        assert False, "expected ValueError"
+    except ValueError as exc:
+        assert "MysteryTab" in str(exc)
+    mock_ws.get_all_records.assert_not_called()

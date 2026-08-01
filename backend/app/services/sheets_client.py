@@ -116,9 +116,27 @@ def list_worksheet_titles(sheet_id: str) -> list[str]:
     return [worksheet.title for worksheet in open_sheet(sheet_id).worksheets()]
 
 
+def _ensure_header(worksheet: gspread.Worksheet, sheet_id: str, worksheet_name: str) -> list[str]:
+    """Returns the worksheet's header row, restoring it first if blank (e.g.
+    someone accidentally deleted row 1 along with data rows) - without this,
+    gspread's get_all_records() raises on an all-empty header row (reads as
+    duplicate "" columns) instead of just treating the sheet as empty."""
+    header = worksheet.row_values(1)
+    if not header:
+        header = _canonical_header(sheet_id, worksheet_name)
+        if not header:
+            raise ValueError(
+                f"'{worksheet_name}' has no header row and no canonical header is known for it"
+            )
+        worksheet.update(range_name="A1", values=[header])
+    return header
+
+
 def read_all_records(sheet_id: str, worksheet_name: str) -> list[dict]:
     """Read a worksheet as a list of dicts, keyed by its header row."""
-    return get_worksheet(sheet_id, worksheet_name).get_all_records()
+    worksheet = get_worksheet(sheet_id, worksheet_name)
+    _ensure_header(worksheet, sheet_id, worksheet_name)
+    return worksheet.get_all_records()
 
 
 def count_data_rows(sheet_id: str, worksheet_name: str) -> int:
@@ -219,14 +237,7 @@ def append_records(sheet_id: str, worksheet_name: str, records: list[dict]) -> N
         return value
 
     worksheet = get_worksheet(sheet_id, worksheet_name)
-    header = worksheet.row_values(1)
-    if not header:
-        header = _canonical_header(sheet_id, worksheet_name)
-        if not header:
-            raise ValueError(
-                f"'{worksheet_name}' has no header row and no canonical header is known for it"
-            )
-        worksheet.update(range_name="A1", values=[header])
+    header = _ensure_header(worksheet, sheet_id, worksheet_name)
 
     rows = [
         [_coerce(record.get(column, ""), column) for column in header]
