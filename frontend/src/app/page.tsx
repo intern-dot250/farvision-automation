@@ -342,6 +342,7 @@ export default function DashboardPage() {
                       <th className="px-3 py-2 font-medium">Destination</th>
                       <th className="px-3 py-2 font-medium">Sheet</th>
                       <th className="px-3 py-2 font-medium">Description</th>
+                      <th className="px-3 py-2 font-medium">Narration</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
@@ -385,6 +386,12 @@ export default function DashboardPage() {
                           title={txn.description}
                         >
                           {txn.description}
+                        </td>
+                        <td
+                          className="max-w-xs truncate px-3 py-2 text-zinc-600 dark:text-zinc-400"
+                          title={txn.narration}
+                        >
+                          {txn.narration}
                         </td>
                       </tr>
                     ))}

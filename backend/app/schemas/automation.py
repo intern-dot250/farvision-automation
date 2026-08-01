@@ -6,6 +6,7 @@ class TransactionSummary(BaseModel):
     date: str
     reference: str
     description: str
+    narration: str
     head: str
     destination: str
     destination_sheet: str | None = None

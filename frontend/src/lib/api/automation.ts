@@ -5,6 +5,7 @@ export type TransactionSummary = {
   date: string;
   reference: string;
   description: string;
+  narration: string;
   head: string;
   destination: string;
   destination_sheet: string | null;

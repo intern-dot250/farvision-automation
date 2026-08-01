@@ -26,6 +26,7 @@ def _build_run_response(result: automation_engine.RunResult) -> RunResponse:
                 date=txn.txn_date.strftime("%d/%m/%Y"),
                 reference=txn.reference,
                 description=txn.description,
+                narration=txn.narration,
                 head=txn.classification.head,
                 destination=txn.destination,
                 destination_sheet=txn.destination_sheet,
