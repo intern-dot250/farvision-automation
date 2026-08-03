@@ -87,7 +87,12 @@ def _resolve_own_bank_name(source_sheet, matched_master, narration_bank) -> str:
     return matched_master.get("Bank Name") or narration_bank or ""
 
 
-def _resolve_counterparty_bank_name(counterparty_account: str | None, matched_master: dict, payee_name: str | None) -> str:
+def _resolve_counterparty_bank_name(
+    counterparty_account: str | None,
+    matched_master: dict,
+    payee_name: str | None,
+    raw_description: str | None = None,
+) -> str:
     """Resolve the Account Head value for a Deposit/Withdrawal (internal
     transfer) row - the full account name/number of whichever side of the
     transfer is NOT our own account, mirroring _resolve_own_bank_name's
@@ -96,16 +101,26 @@ def _resolve_counterparty_bank_name(counterparty_account: str | None, matched_ma
     counterparty_account comes from a TPT-shaped narration's embedded
     destination account number (description_parser.py). When it's absent
     (a minority of internal-transfer narration shapes have no embedded
-    account number to extract) or has no matching Master suffix, fall back
-    to Master's Bank Name for the matched payee, then the payee name itself,
-    then the literal "Internal Transfer" as the last resort - Account Head
-    is never left blank."""
+    account number to extract - e.g. the counterparty's account number is
+    prefixed with a bank code instead of being a bare digit string) or has
+    no matching Master suffix, try the raw description's last 4 characters
+    directly - the same extraction _compute_narration_from_formula() already
+    uses for the Narration's "x{last4}" text, so Account Head can never
+    disagree with what the Narration already (correctly) shows. Only after
+    both attempts fail does this fall back to Master's Bank Name for the
+    matched payee, then the payee name itself, then the literal
+    "Internal Transfer" as the last resort - Account Head is never left
+    blank."""
     if counterparty_account:
         suffix = master_repository._last_n_digits(counterparty_account, 4)
         if suffix:
             full = master_repository.find_bank_by_account_suffix(suffix)
             if full:
                 return full
+    if raw_description and len(raw_description) >= 4:
+        full = master_repository.find_bank_by_account_suffix(raw_description[-4:])
+        if full:
+            return full
     return matched_master.get("Bank Name") or payee_name or "Internal Transfer"
 
 
@@ -369,7 +384,8 @@ def _build_deposit_withdrawal_rows(txn: TransactionRowSet, link_ref_code: int) -
         txn.source_sheet, matched, txn.classification.bank_name
     )
     counterparty_bank_name = _resolve_counterparty_bank_name(
-        txn.classification.counterparty_account, matched, txn.classification.payee_name
+        txn.classification.counterparty_account, matched, txn.classification.payee_name,
+        raw_description=txn.description,
     )
 
     return {

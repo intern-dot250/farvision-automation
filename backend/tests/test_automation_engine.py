@@ -71,11 +71,12 @@ def _internal_txn(
     matched_master_row: dict | None = None,
     bank_name: str | None = None,
     counterparty_account: str | None = None,
+    description: str = "YIB-TPT-Some Entity-045563200000377",
 ) -> TransactionRowSet:
     return TransactionRowSet(
         sl_no="1",
         reference="",
-        description="YIB-TPT-Some Entity-045563200000377",
+        description=description,
         debit=1000.0,
         credit=0.0,
         business_unit="Casa Romana",
@@ -93,7 +94,16 @@ def _internal_txn(
     )
 
 
-def test_deposit_withdrawal_uses_extracted_entity_name_as_payee():
+def test_deposit_withdrawal_uses_extracted_entity_name_as_payee(monkeypatch):
+    from app.services import master_repository
+
+    # No real Master match for this fixture's description/counterparty -
+    # isolates this test from whatever real account suffixes happen to be
+    # in production Master data (the fixture description's trailing digits
+    # are otherwise coincidental, not meant to reference a real account).
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: pd.DataFrame(columns=["Bank Name"]))
+    master_repository._bank_name_suffix_index.cache_clear()
+
     rows = _build_deposit_withdrawal_rows(_internal_txn("DWARKADHIS PROJECTS PRIVATE LIMITED"), link_ref_code=1)
 
     ledger = rows["LedgerDetails"][0]
@@ -105,7 +115,12 @@ def test_deposit_withdrawal_uses_extracted_entity_name_as_payee():
     assert ledger["Parent Account Head"] == ""
 
 
-def test_deposit_withdrawal_falls_back_to_generic_label_when_no_name_extracted():
+def test_deposit_withdrawal_falls_back_to_generic_label_when_no_name_extracted(monkeypatch):
+    from app.services import master_repository
+
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: pd.DataFrame(columns=["Bank Name"]))
+    master_repository._bank_name_suffix_index.cache_clear()
+
     rows = _build_deposit_withdrawal_rows(_internal_txn(None), link_ref_code=1)
 
     ledger = rows["LedgerDetails"][0]
@@ -142,6 +157,32 @@ def test_deposit_withdrawal_account_head_falls_back_to_master_bank_name_when_no_
     rows = _build_deposit_withdrawal_rows(txn, link_ref_code=1)
 
     assert rows["LedgerDetails"][0]["Account Head"] == "UBI ESCROW A/C CR- 497801010000168"
+
+
+def test_deposit_withdrawal_account_head_falls_back_to_description_suffix_when_no_counterparty_account(monkeypatch):
+    """Reproduces the real bug: a bank-code-prefixed counterparty account
+    number (e.g. Bank of Maharashtra's format) doesn't parse out as a bare
+    digit string in description_parser.py, so classification.counterparty_account
+    comes back None - but the raw description's last 4 characters ("9675")
+    still match a real Master account, and Account Head must resolve to it
+    instead of falling all the way back to a generic label (matching what
+    the Narration's own "x9675" text already correctly shows)."""
+    from app.services import master_repository
+
+    df = pd.DataFrame.from_records(
+        [{"Bank Name": "BOM IDW A/C.(60090729675)"}]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+    master_repository._bank_name_suffix_index.cache_clear()
+
+    txn = _internal_txn(
+        "BANK OF MAHARASHTRA",
+        counterparty_account=None,
+        description="YIB-TPT-BOM60090729675",
+    )
+    rows = _build_deposit_withdrawal_rows(txn, link_ref_code=1)
+
+    assert rows["LedgerDetails"][0]["Account Head"] == "BOM IDW A/C.(60090729675)"
 
 
 def test_deposit_withdrawal_bank_name_comes_from_master_first():
