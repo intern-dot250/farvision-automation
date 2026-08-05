@@ -381,11 +381,11 @@ export default function DashboardPage() {
                                 ? "Deposit / Withdrawal"
                                 : "—"}
                         </td>
-                        <td className="max-w-xs px-3 py-2 text-zinc-600 dark:text-zinc-400">
-                          <span className="line-clamp-3">{txn.description}</span>
+                        <td className="max-w-xs whitespace-normal break-words px-3 py-2 text-zinc-600 dark:text-zinc-400">
+                          {txn.description}
                         </td>
-                        <td className="max-w-xs px-3 py-2 text-zinc-600 dark:text-zinc-400">
-                          <span className="line-clamp-3">{txn.narration}</span>
+                        <td className="max-w-xs whitespace-normal break-words px-3 py-2 text-zinc-600 dark:text-zinc-400">
+                          {txn.narration}
                         </td>
                       </tr>
                     ))}
