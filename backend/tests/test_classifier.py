@@ -27,7 +27,7 @@ def test_internal_transfer_still_looks_up_master_for_bank_name():
             "YIB-TPT-DWARKADHIS PROJECTS PRIVATE LIMITED IN CIRP CR-045563200000377"
         )
 
-    mock_find.assert_called_once_with("DWARKADHIS PROJECTS PRIVATE LIMITED IN CIRP CR")
+    mock_find.assert_called_once_with("DWARKADHIS PROJECTS PRIVATE LIMITED IN CIRP CR", company="DPL")
     assert result.is_internal is True
     assert result.head == "Internal"
     assert result.needs_review is False
@@ -208,3 +208,23 @@ def test_plain_name_description_with_no_master_match_routes_to_unclassified():
     assert result.payee_name == "VIJAY YADAV"
     assert result.needs_review is False
     assert result.head == "Unclassified"
+
+
+# --- Company resolution (Master mixes DPL/AMB) ---
+
+
+def test_source_sheet_resolves_company_and_threads_into_master_lookup():
+    with patch("app.services.classifier.master_repository.find_party", return_value=None) as mock_find:
+        classify_transaction("VIJAY YADAV", source_sheet="YES AH IDW 2457")
+
+    mock_find.assert_called_once_with("VIJAY YADAV", company="DPL")
+
+
+def test_no_source_sheet_still_defaults_to_dpl():
+    # No source_sheet (e.g. running against the plain configured Sheet) -
+    # resolve_company() still defaults to "DPL", the only company currently
+    # processed, so this doesn't change existing behavior.
+    with patch("app.services.classifier.master_repository.find_party", return_value=None) as mock_find:
+        classify_transaction("VIJAY YADAV")
+
+    mock_find.assert_called_once_with("VIJAY YADAV", company="DPL")

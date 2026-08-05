@@ -72,6 +72,38 @@ def _last_n_digits(value: str, n: int) -> str | None:
     return None
 
 
+# Known bank account suffixes (last 4 digits) mapped to which company's
+# Master chart-of-accounts rows they belong to. Master mixes two companies'
+# data (DPL and AMB) with many identically-named Account Head rows whose
+# Parent Account Head genuinely differs between them - lookups must be
+# scoped to the right company, not just "first match in sheet order wins".
+# Extend this as more accounts (e.g. AMB's) are onboarded; unrecognized
+# accounts default to "DPL", the only company currently processed.
+_ACCOUNT_SUFFIX_COMPANY: dict[str, str] = {
+    "2314": "DPL",
+    "2457": "DPL",
+    "2477": "DPL",
+    "0490": "DPL",
+    "0377": "DPL",
+    "0264": "DPL",
+}
+
+
+def resolve_company(source_sheet: str | None, bank_name: str | None = None) -> str:
+    """Which company's Master rows apply to a transaction, determined from
+    its own bank account (short-form source tab name, e.g. "YES AH IDW
+    2457", and/or narration-parsed bank name). Defaults to "DPL" when
+    unrecognized - the only company currently processed."""
+    if source_sheet:
+        suffix = _last_n_digits(source_sheet, 4)
+        if suffix and suffix in _ACCOUNT_SUFFIX_COMPANY:
+            return _ACCOUNT_SUFFIX_COMPANY[suffix]
+    text = f"{source_sheet or ''} {bank_name or ''}".upper()
+    if "MAHARASHTRA" in text or "MAHARAS" in text:
+        return "DPL"
+    return "DPL"
+
+
 @lru_cache
 def _bank_name_suffix_index(n: int) -> dict[str, str]:
     """Precomputed {last-N-digit account suffix: full Bank Name}, built once
@@ -149,12 +181,19 @@ def _canonical_stripped_column(column: str) -> pd.Series | None:
     return stripped.apply(_canonical)
 
 
-def find_party(payee_name: str | None) -> dict | None:
+def find_party(payee_name: str | None, company: str | None = "DPL") -> dict | None:
     """Look up a party in Master by Payee Name or Account Head, case/whitespace-insensitive.
 
     Returns the first matching row as a dict, or None if no party in Master
     matches — which is how "Internal" transactions with no IFSC still get a
     definitive non-match check against known parties.
+
+    `company` (see resolve_company()) restricts matches to that company's
+    own rows when Master has a "Company" column - Master mixes two
+    companies' charts of accounts, and many identically-named Account Head
+    rows have genuinely different Parent Account Head values between them.
+    Fixture DataFrames with no "Company" column (every existing test) are
+    unaffected - filtering only activates against real Master data.
     """
     if not payee_name:
         return None
@@ -163,6 +202,10 @@ def find_party(payee_name: str | None) -> dict | None:
     key = _normalize(payee_name)
     canonical_key = _canonical(key)
 
+    company_mask = None
+    if company and "Company" in df.columns:
+        company_mask = df["Company"].astype(str).str.strip().str.upper() == company.strip().upper()
+
     for column in _LOOKUP_COLUMNS:
         normalized = _normalized_column(column)
         if normalized is None:
@@ -170,12 +213,15 @@ def find_party(payee_name: str | None) -> dict | None:
         stripped = _stripped_column(column)
         canonical_normalized = _canonical_column(column)
         canonical_stripped = _canonical_stripped_column(column)
-        match = df[
+        match_mask = (
             (normalized == key)
             | (stripped == key)
             | (canonical_normalized == canonical_key)
             | (canonical_stripped == canonical_key)
-        ]
+        )
+        if company_mask is not None:
+            match_mask = match_mask & company_mask
+        match = df[match_mask]
         if not match.empty:
             return match.iloc[0].to_dict()
 

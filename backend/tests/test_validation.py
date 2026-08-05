@@ -48,8 +48,7 @@ def test_missing_required_field_is_reported():
 
 def test_deposit_withdrawal_ledger_details_does_not_require_parent_account_head():
     # Parent Account Head is intentionally left blank for internal transfers
-    # (no equivalent concept) - the DepositWithdrawal key signals which
-    # required-field set applies.
+    # (no equivalent concept).
     rows = {
         "DepositWithdrawal": [
             {
@@ -74,7 +73,10 @@ def test_deposit_withdrawal_ledger_details_does_not_require_parent_account_head(
     assert validate_rows(rows) == []
 
 
-def test_receipt_payment_ledger_details_still_requires_parent_account_head():
+def test_receipt_payment_ledger_details_does_not_require_parent_account_head():
+    # Can legitimately be blank when an Override Rule's Account Head has a
+    # blank Parent Account Head in Master itself - see
+    # automation_engine.py's override handling in _assign_rows.
     rows = {
         "ReceiptPayment": [
             {
@@ -96,10 +98,7 @@ def test_receipt_payment_ledger_details_still_requires_parent_account_head():
         ],
     }
 
-    errors = validate_rows(rows)
-
-    assert len(errors) == 1
-    assert "LedgerDetails.Parent Account Head" in errors[0]
+    assert validate_rows(rows) == []
 
 
 def test_document_no_is_not_required_despite_sheet_flag():

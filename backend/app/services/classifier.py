@@ -89,7 +89,10 @@ def _extract_fallback_payee(description: str) -> str | None:
 
 
 def classify_transaction(
-    description: str, existing_head: str | None = None, is_credit: bool | None = None
+    description: str,
+    existing_head: str | None = None,
+    is_credit: bool | None = None,
+    source_sheet: str | None = None,
 ) -> ClassificationResult:
     """Classify a transaction. If ``existing_head`` is provided (non-empty —
     e.g. already filled in on an uploaded statement), it's trusted for the
@@ -100,10 +103,15 @@ def classify_transaction(
     ``is_credit`` (money coming in vs. going out) disambiguates which side
     of a UPI narration's "From:"/"To:" pair is the actual counterparty -
     see description_parser._parse_upi().
+
+    ``source_sheet`` resolves which company's Master rows apply (see
+    master_repository.resolve_company()) - Master mixes two companies'
+    charts of accounts.
     """
     parsed = parse_description(description, is_credit=is_credit)
     payee_name = parsed.payee_name or parsed.bank_name or _extract_fallback_payee(description)
     trusted_head = existing_head.strip() if existing_head else ""
+    company = master_repository.resolve_company(source_sheet, parsed.bank_name)
 
     if trusted_head:
         if trusted_head.upper() == "INTERNAL":
@@ -119,7 +127,7 @@ def classify_transaction(
             # even if the narration has no IFSC ("POS GST" never will) -
             # otherwise every non-NEFT/RTGS narration gets silently
             # relabelled "Internal" regardless of what the file actually says.
-            internal_matched = master_repository.find_party(payee_name)
+            internal_matched = master_repository.find_party(payee_name, company=company)
             return ClassificationResult(
                 is_internal=True,
                 head="Internal",
@@ -134,7 +142,7 @@ def classify_transaction(
         # etc.) is enough on its own to route to Receipt/Payment - a Master
         # match is only used to fill in extra fields (Account Head, Bank
         # Name, ...) when available, not required for routing.
-        matched = master_repository.find_party(payee_name)
+        matched = master_repository.find_party(payee_name, company=company)
 
         return ClassificationResult(
             is_internal=False,
@@ -146,7 +154,7 @@ def classify_transaction(
         )
 
     if parsed.is_internal_format:
-        internal_matched = master_repository.find_party(payee_name)
+        internal_matched = master_repository.find_party(payee_name, company=company)
         return ClassificationResult(
             is_internal=True,
             head="Internal",
@@ -157,7 +165,7 @@ def classify_transaction(
             counterparty_account=parsed.counterparty_account,
         )
 
-    matched = master_repository.find_party(payee_name)
+    matched = master_repository.find_party(payee_name, company=company)
 
     if matched is None:
         # No Master match for the extracted payee name. Instead of blocking

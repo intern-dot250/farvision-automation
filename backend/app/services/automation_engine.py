@@ -487,7 +487,7 @@ def _process_rows_stream(bank_rows: list[dict], run_id: str, settings):
             existing_head = str(row.get("HEAD", "")).strip()
 
             classification = classifier.classify_transaction(
-                description, existing_head=existing_head, is_credit=credit > 0
+                description, existing_head=existing_head, is_credit=credit > 0, source_sheet=source_sheet
             )
 
             reference_digits = master_repository._digits_only(reference)
@@ -634,14 +634,27 @@ def _assign_rows(transactions: list[TransactionRowSet], settings, run_id: str) -
 
         # Override Rules run after classification/row-generation but before
         # validation - only ever replacing the LedgerDetails Account Head
-        # already computed above. Narration parsing, payee extraction, head
-        # classification, duplicate detection, and validation itself are
-        # all untouched by this.
+        # already computed above (and, to keep the two consistent with each
+        # other, Parent Account Head re-resolved from Master for that new
+        # Account Head - see below). Narration parsing, payee extraction,
+        # head classification, duplicate detection, and validation itself
+        # are all untouched by this.
         override = override_rules.find_override(
             txn.description, txn.classification.head, txn.source_sheet, rule_index
         )
         if override:
             rows["LedgerDetails"][0]["Account Head"] = override
+            # Without this, Parent Account Head would keep whatever the
+            # *original* (pre-override) payee's Master row had - a
+            # combination that may not exist in Master at all (e.g.
+            # Account Head "IMPREST SITE IDW" paired with the old payee's
+            # "SALARY PAYABLE"). Re-look-up the new Account Head itself so
+            # the two fields always agree with Master - even when Master's
+            # own value for it is blank.
+            override_company = master_repository.resolve_company(txn.source_sheet)
+            override_master_match = master_repository.find_party(override, company=override_company)
+            if override_master_match is not None:
+                rows["LedgerDetails"][0]["Parent Account Head"] = override_master_match.get("Parent Account Head", "")
 
         errors = validation.validate_rows(rows)
         if errors:

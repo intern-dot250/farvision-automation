@@ -151,6 +151,61 @@ def test_find_party_matches_via_canonical_form(monkeypatch):
     assert master_repository.find_party("Totally Unrelated Company") is None
 
 
+def test_resolve_company_matches_known_dpl_account_suffixes():
+    for suffix in ("2314", "2457", "2477", "0490", "0377", "0264"):
+        assert master_repository.resolve_company(f"YES AH IDW {suffix}") == "DPL"
+
+
+def test_resolve_company_matches_bank_of_maharashtra_by_name():
+    assert master_repository.resolve_company("Some Tab", "BANK OF MAHARASHTRA") == "DPL"
+    assert master_repository.resolve_company("BANK OF MAHARAS 1234") == "DPL"
+
+
+def test_resolve_company_defaults_to_dpl_when_unrecognized():
+    assert master_repository.resolve_company("Some Unknown Tab 9999") == "DPL"
+    assert master_repository.resolve_company(None) == "DPL"
+
+
+def test_find_party_scopes_by_company_when_master_has_conflicting_duplicates(monkeypatch):
+    # Master mixes DPL and AMB rows - same Account Head name, genuinely
+    # different Parent Account Head. Reproduces a real conflict found in
+    # production Master data.
+    df = pd.DataFrame.from_records(
+        [
+            {"Company": "DPL", "Payee Name": "ANITA DEVI", "Account Head": "ANITA DEVI", "Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS"},
+            {"Company": "AMB", "Payee Name": "ANITA DEVI", "Account Head": "ANITA DEVI", "Parent Account Head": "SUNDRY CREDITORS - OTHER"},
+        ]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    dpl_match = master_repository.find_party("ANITA DEVI", company="DPL")
+    amb_match = master_repository.find_party("ANITA DEVI", company="AMB")
+
+    assert dpl_match["Parent Account Head"] == "SUNDRY CREDITORS - CONTRACTORS"
+    assert amb_match["Parent Account Head"] == "SUNDRY CREDITORS - OTHER"
+
+
+def test_find_party_company_filter_returns_none_when_only_other_company_matches(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [{"Company": "AMB", "Payee Name": "SOME VENDOR", "Account Head": "SOME VENDOR", "Parent Account Head": "X"}]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    assert master_repository.find_party("SOME VENDOR", company="DPL") is None
+    assert master_repository.find_party("SOME VENDOR", company="AMB") is not None
+
+
+def test_find_party_ignores_company_filter_when_no_company_column(monkeypatch):
+    # Existing fixtures (and older/simpler Master exports) with no
+    # "Company" column at all must be unaffected by the default company="DPL".
+    df = pd.DataFrame.from_records(
+        [{"Payee Name": "SOME VENDOR", "Account Head": "SOME VENDOR", "Parent Account Head": "X"}]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    assert master_repository.find_party("SOME VENDOR")["Parent Account Head"] == "X"
+
+
 def test_find_description_for_head_reuses_description_from_same_parent_account_head(monkeypatch):
     df = pd.DataFrame.from_records(
         [

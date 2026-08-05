@@ -1163,7 +1163,19 @@ def test_deposit_withdrawal_bank_name_resolves_full_form_from_master_by_suffix(m
 
 
 def test_assign_rows_applies_matching_override_rule(monkeypatch):
-    txn = _receipt_payment_txn("Imprest", {})
+    from app.services import master_repository
+
+    # Master has its own row for the override's Account Head, with a
+    # different Parent Account Head than the original (pre-override) payee
+    # had - reproduces the real bug: Account Head "Ravi Vats(555)" must
+    # come with Master's own "IMPREST SITE IDW" Parent Account Head, not
+    # whatever the original "Ravi Vats" payee's Master row happened to have.
+    df = pd.DataFrame.from_records(
+        [{"Company": "DPL", "Payee Name": "Ravi Vats(555)", "Account Head": "Ravi Vats(555)", "Parent Account Head": "IMPREST SITE IDW"}]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    txn = _receipt_payment_txn("Imprest", {"Parent Account Head": "SALARY PAYABLE"})
     txn.description = "YIB-NEFT-YESME61620064305-Ravi Vats-UBIN0567370-Imprest-UNION BANK OF INDIA"
     txn.source_sheet = "YES AH IDW 2457"
 
@@ -1188,9 +1200,122 @@ def test_assign_rows_applies_matching_override_rule(monkeypatch):
 
     assert txn.destination == "receipt_payment"
     assert txn.rows["LedgerDetails"][0]["Account Head"] == "Ravi Vats(555)"
-    # Parent Account Head is untouched by Override Rules, per the explicit
-    # decision to only override Account Head.
-    assert txn.rows["LedgerDetails"][0]["Parent Account Head"] != "Ravi Vats(555)"
+    # Parent Account Head is re-resolved from Master for the NEW (overridden)
+    # Account Head - not left at the original payee's stale "SALARY PAYABLE".
+    assert txn.rows["LedgerDetails"][0]["Parent Account Head"] == "IMPREST SITE IDW"
+
+
+def test_assign_rows_override_parent_account_head_can_be_blank(monkeypatch):
+    # Reproduces the exact reported bug: Master's own row for the override's
+    # Account Head has a blank Parent Account Head - that blank must win
+    # over the original payee's non-blank Parent Account Head.
+    from app.services import master_repository
+
+    df = pd.DataFrame.from_records(
+        [{"Company": "DPL", "Payee Name": "IMPREST SITE IDW", "Account Head": "IMPREST SITE IDW", "Parent Account Head": ""}]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    txn = _receipt_payment_txn("Imprest", {"Parent Account Head": "SALARY PAYABLE"})
+    txn.description = "YIB-NEFT-YESME61620064305-Ravi Vats-UBIN0567370-Imprest-UNION BANK OF INDIA"
+    txn.source_sheet = "YES AH IDW 2457"
+
+    monkeypatch.setattr(
+        "app.services.automation_engine.ref_code.get_next_ref_code", lambda *a, **k: 1
+    )
+    monkeypatch.setattr(
+        "app.services.automation_engine.override_rules_repository.list_active",
+        lambda: [
+            {
+                "id": 1,
+                "description_keyword": "Ravi Vats",
+                "head": "Imprest",
+                "sheet_name": "YES AH IDW 2457",
+                "account_head": "IMPREST SITE IDW",
+                "is_active": True,
+            }
+        ],
+    )
+
+    _assign_rows([txn], _FakeSettings(), run_id="test-run")
+
+    assert txn.rows["LedgerDetails"][0]["Account Head"] == "IMPREST SITE IDW"
+    assert txn.rows["LedgerDetails"][0]["Parent Account Head"] == ""
+
+
+def test_assign_rows_override_parent_account_head_unchanged_when_no_master_match(monkeypatch):
+    # The override's Account Head has no Master row at all - nothing to
+    # correct against, so Parent Account Head stays whatever it already was.
+    from app.services import master_repository
+
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: pd.DataFrame(columns=["Account Head", "Parent Account Head"]))
+
+    txn = _receipt_payment_txn("Imprest", {"Parent Account Head": "SALARY PAYABLE"})
+    txn.description = "YIB-NEFT-YESME61620064305-Ravi Vats-UBIN0567370-Imprest-UNION BANK OF INDIA"
+    txn.source_sheet = "YES AH IDW 2457"
+
+    monkeypatch.setattr(
+        "app.services.automation_engine.ref_code.get_next_ref_code", lambda *a, **k: 1
+    )
+    monkeypatch.setattr(
+        "app.services.automation_engine.override_rules_repository.list_active",
+        lambda: [
+            {
+                "id": 1,
+                "description_keyword": "Ravi Vats",
+                "head": "Imprest",
+                "sheet_name": "YES AH IDW 2457",
+                "account_head": "Some Account Head Not In Master",
+                "is_active": True,
+            }
+        ],
+    )
+
+    _assign_rows([txn], _FakeSettings(), run_id="test-run")
+
+    assert txn.rows["LedgerDetails"][0]["Account Head"] == "Some Account Head Not In Master"
+    assert txn.rows["LedgerDetails"][0]["Parent Account Head"] == "SALARY PAYABLE"
+
+
+def test_assign_rows_override_scopes_master_lookup_to_dpl_company(monkeypatch):
+    # Master has the same Account Head name for both companies, with a
+    # genuinely different Parent Account Head - the override fix must pick
+    # DPL's row (the only company currently processed), not whichever
+    # happens to come first in Master's own row order.
+    from app.services import master_repository
+
+    df = pd.DataFrame.from_records(
+        [
+            {"Company": "AMB", "Payee Name": "ANITA DEVI", "Account Head": "ANITA DEVI", "Parent Account Head": "SUNDRY CREDITORS - OTHER"},
+            {"Company": "DPL", "Payee Name": "ANITA DEVI", "Account Head": "ANITA DEVI", "Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS"},
+        ]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    txn = _receipt_payment_txn("Imprest", {"Parent Account Head": "SALARY PAYABLE"})
+    txn.description = "YIB-NEFT-YESME61620064305-Ravi Vats-UBIN0567370-Imprest-UNION BANK OF INDIA"
+    txn.source_sheet = "YES AH IDW 2457"
+
+    monkeypatch.setattr(
+        "app.services.automation_engine.ref_code.get_next_ref_code", lambda *a, **k: 1
+    )
+    monkeypatch.setattr(
+        "app.services.automation_engine.override_rules_repository.list_active",
+        lambda: [
+            {
+                "id": 1,
+                "description_keyword": "Ravi Vats",
+                "head": "Imprest",
+                "sheet_name": "YES AH IDW 2457",
+                "account_head": "ANITA DEVI",
+                "is_active": True,
+            }
+        ],
+    )
+
+    _assign_rows([txn], _FakeSettings(), run_id="test-run")
+
+    assert txn.rows["LedgerDetails"][0]["Parent Account Head"] == "SUNDRY CREDITORS - CONTRACTORS"
 
 
 def test_assign_rows_leaves_account_head_unchanged_when_no_rule_matches(monkeypatch):
