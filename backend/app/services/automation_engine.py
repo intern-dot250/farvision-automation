@@ -626,60 +626,73 @@ def _assign_rows(transactions: list[TransactionRowSet], settings, run_id: str) -
         if txn.destination not in ("receipt_payment", "deposit_withdrawal"):
             continue
 
-        rows = (
-            _build_receipt_payment_rows(txn, rp_next_ref)
-            if txn.destination == "receipt_payment"
-            else _build_deposit_withdrawal_rows(txn, dw_next_ref)
-        )
-
-        # Override Rules run after classification/row-generation but before
-        # validation - only ever replacing the LedgerDetails Account Head
-        # already computed above (and, to keep the two consistent with each
-        # other, Parent Account Head re-resolved from Master for that new
-        # Account Head - see below). Narration parsing, payee extraction,
-        # head classification, duplicate detection, and validation itself
-        # are all untouched by this.
-        override = override_rules.find_override(
-            txn.description, txn.classification.head, txn.source_sheet, rule_index
-        )
-        if override:
-            rows["LedgerDetails"][0]["Account Head"] = override
-            # Without this, Parent Account Head would keep whatever the
-            # *original* (pre-override) payee's Master row had - a
-            # combination that may not exist in Master at all (e.g.
-            # Account Head "IMPREST SITE IDW" paired with the old payee's
-            # "SALARY PAYABLE"). Re-look-up the new Account Head itself so
-            # the two fields always agree with Master - even when Master's
-            # own value for it is blank.
-            override_company = master_repository.resolve_company(txn.source_sheet)
-            override_master_match = master_repository.find_party(override, company=override_company)
-            if override_master_match is not None:
-                rows["LedgerDetails"][0]["Parent Account Head"] = override_master_match.get("Parent Account Head", "")
-
-        errors = validation.validate_rows(rows)
-        if errors:
-            logger.warning(f"[{run_id}] SL#{txn.sl_no} failed validation: {errors}")
-            ledger_repository.log_audit(
-                run_id, "error", f"SL#{txn.sl_no} failed validation",
-                {"reference": txn.reference, "errors": errors},
+        try:
+            rows = (
+                _build_receipt_payment_rows(txn, rp_next_ref)
+                if txn.destination == "receipt_payment"
+                else _build_deposit_withdrawal_rows(txn, dw_next_ref)
             )
-            txn.destination = "review"
-            txn.review_reason = "; ".join(errors)
-            continue
 
-        # Routing to Review is driven only by real validation failures
-        # (missing required fields, checked above) - not by a missing Master
-        # Description. Business rule: Internal head -> Deposit/Withdrawal,
-        # every other head (Contractor/Vendor/Imprest/Collection/...) ->
-        # Receipt/Payment, regardless of whether Master has a Description
-        # for the payee. When Description is missing, ImportTaxInfo simply
-        # has no TDS/GST rows for that transaction (see
-        # _build_import_tax_info_rows) rather than blocking the whole row.
-        txn.rows = rows
-        if txn.destination == "receipt_payment":
-            rp_next_ref += 1
-        else:
-            dw_next_ref += 1
+            # Override Rules run after classification/row-generation but before
+            # validation - only ever replacing the LedgerDetails Account Head
+            # already computed above (and, to keep the two consistent with each
+            # other, Parent Account Head re-resolved from Master for that new
+            # Account Head - see below). Narration parsing, payee extraction,
+            # head classification, duplicate detection, and validation itself
+            # are all untouched by this.
+            override = override_rules.find_override(
+                txn.description, txn.classification.head, txn.source_sheet, rule_index
+            )
+            if override:
+                rows["LedgerDetails"][0]["Account Head"] = override
+                # Without this, Parent Account Head would keep whatever the
+                # *original* (pre-override) payee's Master row had - a
+                # combination that may not exist in Master at all (e.g.
+                # Account Head "IMPREST SITE IDW" paired with the old payee's
+                # "SALARY PAYABLE"). Re-look-up the new Account Head itself so
+                # the two fields always agree with Master - even when Master's
+                # own value for it is blank.
+                override_company = master_repository.resolve_company(txn.source_sheet)
+                override_master_match = master_repository.find_party(override, company=override_company)
+                if override_master_match is not None:
+                    rows["LedgerDetails"][0]["Parent Account Head"] = override_master_match.get("Parent Account Head", "")
+
+            errors = validation.validate_rows(rows)
+            if errors:
+                logger.warning(f"[{run_id}] SL#{txn.sl_no} failed validation: {errors}")
+                ledger_repository.log_audit(
+                    run_id, "error", f"SL#{txn.sl_no} failed validation",
+                    {"reference": txn.reference, "errors": errors},
+                )
+                txn.destination = "review"
+                txn.review_reason = "; ".join(errors)
+                continue
+
+            # Routing to Review is driven only by real validation failures
+            # (missing required fields, checked above) - not by a missing Master
+            # Description. Business rule: Internal head -> Deposit/Withdrawal,
+            # every other head (Contractor/Vendor/Imprest/Collection/...) ->
+            # Receipt/Payment, regardless of whether Master has a Description
+            # for the payee. When Description is missing, ImportTaxInfo simply
+            # has no TDS/GST rows for that transaction (see
+            # _build_import_tax_info_rows) rather than blocking the whole row.
+            txn.rows = rows
+            if txn.destination == "receipt_payment":
+                rp_next_ref += 1
+            else:
+                dw_next_ref += 1
+        except Exception as exc:
+            # Row-building/Override Rules/Master lookups are otherwise
+            # unguarded here - a single transaction hitting an unexpected
+            # error (e.g. a transient Master/Sheets failure) must not take
+            # down the whole run, same convention as _process_rows_stream's
+            # per-row except block above.
+            logger.error(f"[{run_id}] Failed to assign rows for SL#{txn.sl_no}: {exc}")
+            ledger_repository.log_audit(
+                run_id, "error", f"Failed to assign rows for SL#{txn.sl_no}", {"reference": txn.reference, "error": str(exc)}
+            )
+            txn.destination = "error"
+            txn.review_reason = str(exc)
 
 
 def _write_transactions(transactions: list[TransactionRowSet], settings, run_id: str) -> None:

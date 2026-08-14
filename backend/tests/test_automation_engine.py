@@ -1382,3 +1382,42 @@ def test_assign_rows_degrades_gracefully_when_rule_loading_fails(monkeypatch):
 
     assert txn.destination == "receipt_payment"
     assert txn.rows["LedgerDetails"][0]["Account Head"] == "Auto Matched Head"
+
+
+def test_assign_rows_one_bad_transaction_does_not_block_the_rest(monkeypatch):
+    # Reproduces the reported production bug: one transaction's row-building
+    # raises (e.g. a transient Master/Sheets error, or Supabase being
+    # unreachable during audit logging) - previously this took down the
+    # whole run and the streaming API response never reached its final
+    # "result" event. It must instead route just that transaction to
+    # "error" and let the rest of the batch complete normally.
+    from app.services import automation_engine as engine_module
+
+    bad_txn = _receipt_payment_txn("Contractor", {"Account Head": "Bad Txn Head"})
+    bad_txn.sl_no = "1"
+    good_txn = _receipt_payment_txn("Contractor", {"Account Head": "Good Txn Head"})
+    good_txn.sl_no = "2"
+
+    real_build = engine_module._build_receipt_payment_rows
+
+    def fake_build(txn, link_ref_code):
+        if txn.sl_no == "1":
+            raise RuntimeError("Supabase unreachable")
+        return real_build(txn, link_ref_code)
+
+    monkeypatch.setattr(engine_module, "_build_receipt_payment_rows", fake_build)
+    monkeypatch.setattr(
+        "app.services.automation_engine.ref_code.get_next_ref_code", lambda *a, **k: 1
+    )
+    monkeypatch.setattr(
+        "app.services.automation_engine.override_rules_repository.list_active", lambda: []
+    )
+
+    with patch("app.services.automation_engine.ledger_repository.log_audit"):
+        _assign_rows([bad_txn, good_txn], _FakeSettings(), run_id="test-run")
+
+    assert bad_txn.destination == "error"
+    assert "Supabase unreachable" in bad_txn.review_reason
+
+    assert good_txn.destination == "receipt_payment"
+    assert good_txn.rows["LedgerDetails"][0]["Account Head"] == "Good Txn Head"
