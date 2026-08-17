@@ -296,14 +296,17 @@ def test_contractor_head_gets_two_import_tax_info_rows():
         assert row["Detail Link Ref Code"] == 7
 
 
-def test_vendor_head_gets_single_gst_import_tax_info_row():
+def test_vendor_head_gets_single_blank_import_tax_info_row():
+    # GST is never tracked in ImportTaxInfo - Vendor's row stays present
+    # (keeping 1:1 tracking with ReceiptPayment) but both fields are blank,
+    # even when Master has real GST description data.
     txn = _receipt_payment_txn("Vendor", {"Description": "Nil Rated-Service"})
     rows = _build_receipt_payment_rows(txn, link_ref_code=3)
 
     tax_rows = rows["ImportTaxInfo"]
     assert len(tax_rows) == 1
-    assert tax_rows[0]["Deduction Type"] == "Goods and Service Tax"
-    assert tax_rows[0]["Description"] == "Nil Rated-Service"
+    assert tax_rows[0]["Deduction Type"] == ""
+    assert tax_rows[0]["Description"] == ""
 
 
 def test_receipt_payment_bank_name_comes_from_master_not_hardcoded():
@@ -362,13 +365,29 @@ def test_contractor_with_empty_description_defaults_to_tds_on_contractors():
     assert tax_rows[1]["Description"] == ""
 
 
-def test_vendor_with_empty_description_still_emits_import_tax_info_row():
+def test_vendor_with_empty_description_still_emits_blank_import_tax_info_row():
     txn = _receipt_payment_txn("Vendor", {})
     rows = _build_receipt_payment_rows(txn, link_ref_code=9)
 
     tax_rows = rows["ImportTaxInfo"]
     assert len(tax_rows) == 1
-    assert tax_rows[0]["Deduction Type"] == "Goods and Service Tax"
+    assert tax_rows[0]["Deduction Type"] == ""
+    assert tax_rows[0]["Description"] == ""
+
+
+def test_other_head_with_gst_deduction_type_emits_blank_import_tax_info_row():
+    # Even outside Contractor/Vendor, if Master's own Deduction Type happens
+    # to be "Goods and Service Tax", it's suppressed the same way - GST is
+    # never written anywhere in this tab.
+    txn = _receipt_payment_txn(
+        "Collection",
+        {"Deduction Type": "Goods and Service Tax", "Description": "Some GST description"},
+    )
+    rows = _build_receipt_payment_rows(txn, link_ref_code=13)
+
+    tax_rows = rows["ImportTaxInfo"]
+    assert len(tax_rows) == 1
+    assert tax_rows[0]["Deduction Type"] == ""
     assert tax_rows[0]["Description"] == ""
 
 
@@ -409,7 +428,10 @@ def test_contractor_with_blank_description_falls_back_to_same_category_descripti
     assert tax_rows[1]["Description"] == ""
 
 
-def test_vendor_with_blank_description_falls_back_to_same_category_gst_description():
+def test_vendor_never_resolves_a_gst_description():
+    # GST is never tracked in ImportTaxInfo anymore - Vendor's row is always
+    # blank, so no Description lookup (own Master row or same-category
+    # fallback) should even run for it.
     txn = _receipt_payment_txn(
         "Vendor",
         {"Account Head": "SOME VENDOR", "Parent Account Head": "SUNDRY CREDITORS - OTHER"},
@@ -417,12 +439,12 @@ def test_vendor_with_blank_description_falls_back_to_same_category_gst_descripti
 
     with patch(
         "app.services.automation_engine.master_repository.find_description_for_head",
-        return_value="Nil Rated-Service",
     ) as mock_fallback:
         rows = _build_receipt_payment_rows(txn, link_ref_code=12)
 
-    mock_fallback.assert_called_once_with("SOME VENDOR", "SUNDRY CREDITORS - OTHER", "Goods and Service Tax")
-    assert rows["ImportTaxInfo"][0]["Description"] == "Nil Rated-Service"
+    mock_fallback.assert_not_called()
+    assert rows["ImportTaxInfo"][0]["Deduction Type"] == ""
+    assert rows["ImportTaxInfo"][0]["Description"] == ""
 
 
 def test_other_head_with_blank_deduction_falls_back_to_paired_deduction_and_description():

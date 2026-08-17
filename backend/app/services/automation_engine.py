@@ -259,20 +259,26 @@ def _resolve_import_tax_description(matched: dict, deduction_type: str, default:
 def _build_import_tax_info_rows(txn: TransactionRowSet, link_ref_code: int, matched: dict) -> list[dict]:
     """Every Receipt/Payment transaction gets a matching ImportTaxInfo row on
     the same Link Ref Code, so the tab tracks 1:1 with ReceiptPayment.
-    Contractor payments get a TDS row plus a second, deliberately blank row
-    (Contractor payments have no real GST data of their own, unlike Vendor -
-    the row stays present to keep the 2-rows-per-Contractor-transaction
-    shape, but nothing is written into it); Vendor payments get only the GST
-    row; every other head keeps a single Master-driven row.
+    "Goods and Service Tax" is never written as a Deduction Type anywhere in
+    this tab - only a genuine "Tax deducted at source" row ever gets real
+    content; every other row (Vendor's GST row, any other head whose Master
+    data resolves to GST, and Contractor's second row) is left blank on
+    purpose, since the accounts team doesn't track GST here. Contractor
+    payments get a TDS row plus a second, deliberately blank row (the row
+    stays present to keep the 2-rows-per-Contractor-transaction shape, but
+    nothing is written into it); Vendor payments get a single blank row;
+    every other head keeps a single Master-driven row, blanked if it
+    resolves to GST.
 
-    Contractor/Vendor already know their Deduction Type, so only the
-    Description needs resolving (own Master row, then same-category
-    fallback, then a fixed default for Contractor since every Contractor
-    payment is a TDS-on-contractor deduction by definition). Other heads
-    don't have a predetermined Deduction Type, so Deduction Type and
-    Description are resolved together as a pair from the same Master row
-    (master_repository.find_deduction_for_head) to keep them consistent."""
+    Contractor already knows its Deduction Type, so only the Description
+    needs resolving (own Master row, then same-category fallback, then a
+    fixed default, since every Contractor payment is a TDS-on-contractor
+    deduction by definition). Other heads don't have a predetermined
+    Deduction Type, so Deduction Type and Description are resolved together
+    as a pair from the same Master row (master_repository.find_deduction_for_head)
+    to keep them consistent."""
     base = {"Link Ref Code": link_ref_code, "Detail Link Ref Code": link_ref_code}
+    blank = {**base, "Deduction Type": "", "Description": ""}
 
     if txn.classification.head == "Contractor":
         tds_description = _resolve_import_tax_description(
@@ -280,11 +286,10 @@ def _build_import_tax_info_rows(txn: TransactionRowSet, link_ref_code: int, matc
         )
         return [
             {**base, "Deduction Type": "Tax deducted at source", "Description": tds_description},
-            {**base, "Deduction Type": "", "Description": ""},
+            dict(blank),
         ]
     if txn.classification.head == "Vendor":
-        description = _resolve_import_tax_description(matched, "Goods and Service Tax")
-        return [{**base, "Deduction Type": "Goods and Service Tax", "Description": description}]
+        return [dict(blank)]
 
     deduction_type = matched.get("Deduction Type", "")
     description = matched.get("Description", "")
@@ -296,6 +301,8 @@ def _build_import_tax_info_rows(txn: TransactionRowSet, link_ref_code: int, matc
             fallback_type, fallback_description = fallback
             deduction_type = deduction_type or fallback_type
             description = description or fallback_description
+    if deduction_type == "Goods and Service Tax":
+        return [dict(blank)]
     return [{**base, "Deduction Type": deduction_type, "Description": description}]
 
 
