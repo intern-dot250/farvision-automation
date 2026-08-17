@@ -41,8 +41,13 @@ def _build_run_response(result: automation_engine.RunResult) -> RunResponse:
                 destination_sheet=txn.destination_sheet,
                 source_sheet=txn.source_sheet,
                 payee_name=txn.classification.payee_name,
-                needs_review=txn.destination in ("review", "error"),
-                review_reason=txn.review_reason or txn.classification.review_reason,
+                needs_review=txn.destination in ("review", "error") or txn.classification.account_head_ambiguous,
+                review_reason=(
+                    txn.review_reason
+                    or txn.classification.review_reason
+                    or ("Beneficiary matches multiple Account Heads - resolve via the sheet's dropdown"
+                        if txn.classification.account_head_ambiguous else None)
+                ),
             )
             for txn in result.transactions
         ],

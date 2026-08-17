@@ -3,6 +3,7 @@ from pathlib import Path
 
 import gspread
 from google.oauth2.service_account import Credentials
+from gspread.utils import ValidationConditionType
 
 from app.core.config import get_settings
 
@@ -149,6 +150,38 @@ def count_data_rows(sheet_id: str, worksheet_name: str) -> int:
     return max(len(values) - 1, 0)
 
 
+def get_columns(sheet_id: str, worksheet_name: str, columns: list[str]) -> list[tuple[str, ...]]:
+    """Several named columns read together, row-aligned (excluding the
+    header) - used to build an index (e.g. {payee: Counter((Account Head,
+    Parent Account Head))}) without reading the whole worksheet. Returns []
+    if any requested column doesn't exist.
+    """
+    worksheet = get_worksheet(sheet_id, worksheet_name)
+    header = worksheet.row_values(1)
+    if any(column not in header for column in columns):
+        return []
+    indexes = [header.index(column) + 1 for column in columns]
+    value_lists = [worksheet.col_values(i)[1:] for i in indexes]
+    return list(zip(*value_lists))
+
+
+def find_row_number(sheet_id: str, worksheet_name: str, column: str, value) -> int | None:
+    """1-indexed row number of the last row whose `column` cell equals
+    `value` (searched from the bottom, since the row of interest was just
+    appended), or None if `column` doesn't exist or no row matches."""
+    worksheet = get_worksheet(sheet_id, worksheet_name)
+    header = worksheet.row_values(1)
+    if column not in header:
+        return None
+    col_index = header.index(column) + 1
+    values = worksheet.col_values(col_index)
+    target = str(value).strip()
+    for i in range(len(values) - 1, 0, -1):
+        if values[i].strip() == target:
+            return i + 1
+    return None
+
+
 def get_column_values(sheet_id: str, worksheet_name: str, column: str) -> set[str]:
     """Non-empty values in a named column (excluding the header), reading
     just that one column rather than the whole sheet. Returns an empty set
@@ -245,6 +278,29 @@ def append_records(sheet_id: str, worksheet_name: str, records: list[dict]) -> N
     ]
     worksheet.append_rows(rows, value_input_option="RAW")
     _apply_amount_number_format(worksheet, header, worksheet_name)
+
+
+def add_dropdown_validation(
+    sheet_id: str, worksheet_name: str, row_number: int, column: str, values: list[str]
+) -> None:
+    """Attach a native Sheets dropdown (restricted to `values`) to one cell
+    of an already-written row - used for a Ledger Details Account
+    Head/Parent Account Head cell whose beneficiary matched more than one
+    genuine Master option, so it can be resolved with two clicks directly in
+    the sheet instead of a separate review step. No-op if `column` isn't a
+    real header on this worksheet.
+    """
+    worksheet = get_worksheet(sheet_id, worksheet_name)
+    header = worksheet.row_values(1)
+    if column not in header:
+        return
+    letter = _column_letter(header.index(column) + 1)
+    worksheet.add_validation(
+        f"{letter}{row_number}:{letter}{row_number}",
+        ValidationConditionType.one_of_list,
+        values,
+        showCustomUi=True,
+    )
 
 
 # Never cleared, regardless of which tab-name conventions a spreadsheet uses -

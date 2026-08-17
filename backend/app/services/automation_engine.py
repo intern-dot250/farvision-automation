@@ -1,10 +1,12 @@
 import uuid
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 
 from app.core.config import get_settings
 from app.core.logger import logger
 from app.services import (
+    account_head_resolver,
     classifier,
     ledger_repository,
     master_repository,
@@ -461,6 +463,26 @@ def _process_rows_stream(bank_rows: list[dict], run_id: str, settings):
     )
     existing_narration_digits = {master_repository._digits_only(n) for n in rp_narrations | dw_narrations}
 
+    # {normalized payee: Counter((Account Head, Parent Account Head))} built
+    # once per run from every head already written for a payee in
+    # ReceiptPayment's LedgerDetails - lets account_head_resolver.resolve()
+    # favor whichever head this specific beneficiary has actually been
+    # assigned before, when they match more than one Master row. Keyed on
+    # the (Account Head, Parent Account Head) pair, not Account Head alone -
+    # real duplicate-beneficiary rows usually share a near-identical Account
+    # Head and differ only in Parent Account Head. Deposit/Withdrawal's
+    # LedgerDetails Account Head is the counterparty bank name (not a
+    # beneficiary head), so it's deliberately excluded from this index.
+    account_head_history: dict[str, Counter] = {}
+    for payee, account_head, parent_account_head in sheets_client.get_columns(
+        settings.RECEIPT_PAYMENT_SHEET_ID, "LedgerDetails", ["Payee Name", "Account Head", "Parent Account Head"]
+    ):
+        payee = payee.strip()
+        key = (account_head.strip().upper(), parent_account_head.strip().upper())
+        if not payee or not key[0]:
+            continue
+        account_head_history.setdefault(master_repository._normalize(payee), Counter())[key] += 1
+
     total = len(bank_rows)
     transactions = []
     for index, row in enumerate(bank_rows):
@@ -495,7 +517,8 @@ def _process_rows_stream(bank_rows: list[dict], run_id: str, settings):
             existing_head = str(row.get("HEAD", "")).strip()
 
             classification = classifier.classify_transaction(
-                description, existing_head=existing_head, is_credit=credit > 0, source_sheet=source_sheet
+                description, existing_head=existing_head, is_credit=credit > 0, source_sheet=source_sheet,
+                context_text=narration, history=account_head_history,
             )
 
             reference_digits = master_repository._digits_only(reference)
@@ -739,6 +762,63 @@ def _write_transactions(transactions: list[TransactionRowSet], settings, run_id:
     # no separate ledger to update here.
 
 
+def _attach_ambiguous_dropdowns(transactions: list[TransactionRowSet], settings, run_id: str) -> None:
+    """After a real (non-dry-run) write, attach an in-sheet dropdown to every
+    Account Head/Parent Account Head cell whose beneficiary was ambiguous
+    (classification.account_head_candidates set) - restricted to just that
+    beneficiary's real candidate values, so it's resolved with two clicks
+    directly in the sheet.
+
+    This step is compulsory for every ambiguous transaction, not
+    best-effort: a transient failure (e.g. a Sheets API hiccup) is retried
+    once, and a final failure is logged as an error - loudly, not swallowed
+    - while still never blocking or failing the actual data write, which has
+    already happened by the time this runs.
+    """
+    for txn in transactions:
+        candidates = txn.classification.account_head_candidates
+        if not candidates or txn.destination != "receipt_payment" or not txn.rows:
+            continue
+
+        targets = account_head_resolver.dropdown_targets(candidates)
+        if not targets:
+            continue
+
+        ledger_rows = txn.rows.get("LedgerDetails") or []
+        link_ref_code = ledger_rows[0].get("Link Ref Code") if ledger_rows else None
+        if link_ref_code is None:
+            continue
+
+        row_number = sheets_client.find_row_number(
+            settings.RECEIPT_PAYMENT_SHEET_ID, "LedgerDetails", "Link Ref Code", link_ref_code
+        )
+        if row_number is None:
+            logger.error(
+                f"[{run_id}] Could not locate written LedgerDetails row for SL#{txn.sl_no} "
+                f"(Link Ref Code={link_ref_code}) - dropdown not attached"
+            )
+            continue
+
+        for column, values in targets.items():
+            for attempt in (1, 2):
+                try:
+                    sheets_client.add_dropdown_validation(
+                        settings.RECEIPT_PAYMENT_SHEET_ID, "LedgerDetails", row_number, column, values
+                    )
+                    break
+                except Exception as exc:
+                    if attempt < 2:
+                        continue
+                    logger.error(
+                        f"[{run_id}] Failed to attach Account Head dropdown for SL#{txn.sl_no} "
+                        f"column={column!r}: {exc}"
+                    )
+                    ledger_repository.log_audit(
+                        run_id, "error", f"Failed to attach Account Head dropdown for SL#{txn.sl_no}",
+                        {"reference": txn.reference, "column": column, "error": str(exc)},
+                    )
+
+
 def _distinct_sheet_names(bank_rows: list[dict]) -> list[str]:
     """Source tab name(s) actually used by a run (an upload with no sheet
     chosen can span several) - empty for runs against the plain configured
@@ -786,6 +866,7 @@ def run_automation_stream(dry_run: bool = True, rows: list[dict] | None = None):
     if not dry_run:
         yield {"type": "progress", "stage": "writing", "processed": total, "total": total}
         _write_transactions(transactions, settings, run_id)
+        _attach_ambiguous_dropdowns(transactions, settings, run_id)
 
     result = RunResult(
         run_id=run_id,

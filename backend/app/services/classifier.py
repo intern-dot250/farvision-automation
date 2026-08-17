@@ -1,7 +1,8 @@
+from collections import Counter
 from dataclasses import dataclass
 import re
 
-from app.services import master_repository
+from app.services import account_head_resolver, master_repository
 from app.services.description_parser import parse_description
 
 
@@ -15,6 +16,8 @@ class ClassificationResult:
     review_reason: str | None = None
     bank_name: str | None = None
     counterparty_account: str | None = None  # destination account number for TPT-shaped internal transfers
+    account_head_ambiguous: bool = False  # this payee matched 2+ Master rows with no confident auto-pick - matched_master_row is a placeholder, needs an in-sheet dropdown
+    account_head_candidates: list[dict] | None = None  # deduped candidate rows, only set when account_head_ambiguous - used to build the dropdown
 
 
 def _derive_head(master_row: dict) -> str:
@@ -93,6 +96,8 @@ def classify_transaction(
     existing_head: str | None = None,
     is_credit: bool | None = None,
     source_sheet: str | None = None,
+    context_text: str | None = None,
+    history: dict[str, Counter] | None = None,
 ) -> ClassificationResult:
     """Classify a transaction. If ``existing_head`` is provided (non-empty —
     e.g. already filled in on an uploaded statement), it's trusted for the
@@ -107,6 +112,14 @@ def classify_transaction(
     ``source_sheet`` resolves which company's Master rows apply (see
     master_repository.resolve_company()) - Master mixes two companies'
     charts of accounts.
+
+    ``context_text`` (the transaction's display narration, including any
+    "Purpose: ..." text) and ``history`` (a {normalized payee: Counter of
+    previously-written (Account Head, Parent Account Head) pairs} index) are
+    only used to disambiguate a beneficiary that matches more than one
+    Master row - see account_head_resolver.resolve(). Both default to
+    None/empty, which just means every such beneficiary is flagged ambiguous
+    instead of auto-resolved.
     """
     parsed = parse_description(description, is_credit=is_credit)
     payee_name = parsed.payee_name or parsed.bank_name or _extract_fallback_payee(description)
@@ -142,15 +155,20 @@ def classify_transaction(
         # etc.) is enough on its own to route to Receipt/Payment - a Master
         # match is only used to fill in extra fields (Account Head, Bank
         # Name, ...) when available, not required for routing.
-        matched = master_repository.find_party(payee_name, company=company)
+        candidates = master_repository.find_party_candidates(payee_name, company=company)
+        resolved = account_head_resolver.resolve(
+            payee_name, company, candidates, context_text=context_text, history=history
+        )
 
         return ClassificationResult(
             is_internal=False,
             head=trusted_head,
             payee_name=payee_name,
-            matched_master_row=matched,
+            matched_master_row=resolved.row,
             needs_review=False,
             bank_name=parsed.bank_name,
+            account_head_ambiguous=resolved.ambiguous,
+            account_head_candidates=resolved.candidates if resolved.ambiguous else None,
         )
 
     if parsed.is_internal_format:
@@ -165,7 +183,11 @@ def classify_transaction(
             counterparty_account=parsed.counterparty_account,
         )
 
-    matched = master_repository.find_party(payee_name, company=company)
+    candidates = master_repository.find_party_candidates(payee_name, company=company)
+    resolved = account_head_resolver.resolve(
+        payee_name, company, candidates, context_text=context_text, history=history
+    )
+    matched = resolved.row
 
     if matched is None:
         # No Master match for the extracted payee name. Instead of blocking
@@ -189,4 +211,6 @@ def classify_transaction(
         matched_master_row=matched,
         needs_review=False,
         bank_name=parsed.bank_name,
+        account_head_ambiguous=resolved.ambiguous,
+        account_head_candidates=resolved.candidates if resolved.ambiguous else None,
     )

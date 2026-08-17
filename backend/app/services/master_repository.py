@@ -228,6 +228,50 @@ def find_party(payee_name: str | None, company: str | None = "DPL") -> dict | No
     return None
 
 
+def find_party_candidates(payee_name: str | None, company: str | None = "DPL") -> list[dict]:
+    """Every Master row matching payee_name, instead of just the first -
+    same Payee Name/Account Head column priority and company-scoping as
+    find_party() (deliberately duplicated rather than shared, so find_party()
+    itself stays byte-for-byte unchanged for its existing callers).
+
+    Used to detect when a beneficiary name maps to more than one Master row
+    with a genuinely different Account Head/Parent Account Head, so that
+    ambiguity can be resolved (or flagged) instead of silently taking
+    whichever row happens to come first in sheet order.
+    """
+    if not payee_name:
+        return []
+
+    df = _load_master_df()
+    key = _normalize(payee_name)
+    canonical_key = _canonical(key)
+
+    company_mask = None
+    if company and "Company" in df.columns:
+        company_mask = df["Company"].astype(str).str.strip().str.upper() == company.strip().upper()
+
+    for column in _LOOKUP_COLUMNS:
+        normalized = _normalized_column(column)
+        if normalized is None:
+            continue
+        stripped = _stripped_column(column)
+        canonical_normalized = _canonical_column(column)
+        canonical_stripped = _canonical_stripped_column(column)
+        match_mask = (
+            (normalized == key)
+            | (stripped == key)
+            | (canonical_normalized == canonical_key)
+            | (canonical_stripped == canonical_key)
+        )
+        if company_mask is not None:
+            match_mask = match_mask & company_mask
+        match = df[match_mask]
+        if not match.empty:
+            return match.to_dict("records")
+
+    return []
+
+
 def _category_rows(account_head: str | None, parent_account_head: str | None) -> pd.DataFrame:
     """Master rows sharing the given Account Head or Parent Account Head,
     restricted to rows that actually carry a Deduction Type + Description

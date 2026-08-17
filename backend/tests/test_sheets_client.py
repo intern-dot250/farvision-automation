@@ -200,6 +200,78 @@ def test_get_column_values_missing_column_returns_empty_set(monkeypatch):
     assert result == set()
 
 
+def test_get_columns_returns_row_aligned_tuples(monkeypatch):
+    mock_ws = MagicMock()
+    mock_ws.row_values.return_value = ["Payee Name", "Account Head", "Parent Account Head"]
+    mock_ws.col_values.side_effect = [
+        ["Payee Name", "Rajesh Kumar", "Mukesh Kumar"],
+        ["Account Head", "Rajesh Kumar", "Mukesh Kumar"],
+        ["Parent Account Head", "SUNDRY CREDITORS - OTHER", "SUNDRY CREDITORS - CONTRACTORS"],
+    ]
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    result = sheets_client.get_columns("sheet1", "LedgerDetails", ["Payee Name", "Account Head", "Parent Account Head"])
+
+    assert result == [
+        ("Rajesh Kumar", "Rajesh Kumar", "SUNDRY CREDITORS - OTHER"),
+        ("Mukesh Kumar", "Mukesh Kumar", "SUNDRY CREDITORS - CONTRACTORS"),
+    ]
+
+
+def test_get_columns_missing_column_returns_empty_list(monkeypatch):
+    mock_ws = MagicMock()
+    mock_ws.row_values.return_value = ["Payee Name"]
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    result = sheets_client.get_columns("sheet1", "LedgerDetails", ["Payee Name", "Account Head"])
+
+    assert result == []
+
+
+def test_find_row_number_finds_last_matching_row(monkeypatch):
+    mock_ws = MagicMock()
+    mock_ws.row_values.return_value = ["Link Ref Code"]
+    mock_ws.col_values.return_value = ["Link Ref Code", "1", "2", "3"]
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    assert sheets_client.find_row_number("sheet1", "LedgerDetails", "Link Ref Code", 3) == 4
+    assert sheets_client.find_row_number("sheet1", "LedgerDetails", "Link Ref Code", 99) is None
+
+
+def test_find_row_number_missing_column_returns_none(monkeypatch):
+    mock_ws = MagicMock()
+    mock_ws.row_values.return_value = ["Business Unit"]
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    assert sheets_client.find_row_number("sheet1", "LedgerDetails", "Link Ref Code", 3) is None
+
+
+def test_add_dropdown_validation_calls_gspread_with_correct_range(monkeypatch):
+    mock_ws = MagicMock()
+    mock_ws.row_values.return_value = ["Link Ref Code", "Account Head", "Parent Account Head"]
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    sheets_client.add_dropdown_validation(
+        "sheet1", "LedgerDetails", 7, "Parent Account Head", ["A", "B"]
+    )
+
+    mock_ws.add_validation.assert_called_once()
+    args, kwargs = mock_ws.add_validation.call_args
+    assert args[0] == "C7:C7"
+    assert list(args[2]) == ["A", "B"]
+    assert kwargs["showCustomUi"] is True
+
+
+def test_add_dropdown_validation_no_op_for_unknown_column(monkeypatch):
+    mock_ws = MagicMock()
+    mock_ws.row_values.return_value = ["Link Ref Code"]
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    sheets_client.add_dropdown_validation("sheet1", "LedgerDetails", 7, "Parent Account Head", ["A", "B"])
+
+    mock_ws.add_validation.assert_not_called()
+
+
 class _FakeSettings:
     RECEIPT_PAYMENT_SHEET_ID = "rp-sheet-id"
     DEPOSIT_WITHDRAWAL_SHEET_ID = "dw-sheet-id"

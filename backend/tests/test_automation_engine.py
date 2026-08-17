@@ -1,10 +1,12 @@
 import pandas as pd
+import pytest
 from datetime import datetime
 from unittest.mock import patch
 
 from app.services.automation_engine import (
     TransactionRowSet,
     _assign_rows,
+    _attach_ambiguous_dropdowns,
     _build_deposit_withdrawal_rows,
     _build_receipt_payment_rows,
     _compute_narration_from_formula,
@@ -15,6 +17,19 @@ from app.services.automation_engine import (
     clear_destination_data,
 )
 from app.services.classifier import ClassificationResult
+
+
+@pytest.fixture(autouse=True)
+def _default_account_head_history_index(monkeypatch):
+    """_process_rows_stream always reads a small Payee Name/Account
+    Head/Parent Account Head history index (sheets_client.get_columns)
+    before classifying any rows, the same way it already reads
+    get_column_values for duplicate detection. Default this to empty so
+    existing tests (which don't care about history-based disambiguation)
+    don't each need their own Sheets mock for it - a test that does care can
+    still patch sheets_client.get_columns itself, which overrides this
+    default for just that test."""
+    monkeypatch.setattr("app.services.automation_engine.sheets_client.get_columns", lambda *a, **k: [])
 
 
 def test_format_amount_returns_real_int():
@@ -487,8 +502,8 @@ def test_collection_head_with_master_match_and_blank_description_is_skipped():
         "app.services.automation_engine.sheets_client.get_column_values",
         return_value=set(),
     ), patch(
-        "app.services.automation_engine.classifier.master_repository.find_party",
-        return_value={"Account Head": "AMITKUMAR", "Parent Account Head": "SUNDRY DEBTORS"},
+        "app.services.automation_engine.classifier.master_repository.find_party_candidates",
+        return_value=[{"Account Head": "AMITKUMAR", "Parent Account Head": "SUNDRY DEBTORS"}],
     ):
         transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
 
@@ -533,8 +548,8 @@ def test_duplicate_transaction_is_detected_directly_from_the_sheet():
         "app.services.automation_engine.sheets_client.get_column_values",
         side_effect=fake_get_column_values,
     ), patch("app.services.automation_engine.ledger_repository.log_audit"), patch(
-        "app.services.automation_engine.classifier.master_repository.find_party",
-        return_value={"Account Head": "Rakiba BIBI", "Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS"},
+        "app.services.automation_engine.classifier.master_repository.find_party_candidates",
+        return_value=[{"Account Head": "Rakiba BIBI", "Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS"}],
     ):
         transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
 
@@ -565,8 +580,8 @@ def test_non_duplicate_transaction_when_reference_absent_from_both_sheets():
         "app.services.automation_engine.sheets_client.get_column_values",
         return_value=set(),
     ), patch(
-        "app.services.automation_engine.classifier.master_repository.find_party",
-        return_value={"Account Head": "Rakiba BIBI", "Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS"},
+        "app.services.automation_engine.classifier.master_repository.find_party_candidates",
+        return_value=[{"Account Head": "Rakiba BIBI", "Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS"}],
     ):
         transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
 
@@ -600,7 +615,7 @@ def test_narration_column_is_used_over_raw_description_when_present():
     with patch(
         "app.services.automation_engine.sheets_client.get_column_values", return_value=set()
     ), patch(
-        "app.services.automation_engine.classifier.master_repository.find_party", return_value=None
+        "app.services.automation_engine.classifier.master_repository.find_party_candidates", return_value=[]
     ):
         transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
 
@@ -639,7 +654,7 @@ def test_narration_computes_payment_disbursement_when_narration_column_blank():
     with patch(
         "app.services.automation_engine.sheets_client.get_column_values", return_value=set()
     ), patch(
-        "app.services.automation_engine.classifier.master_repository.find_party", return_value=None
+        "app.services.automation_engine.classifier.master_repository.find_party_candidates", return_value=[]
     ):
         transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
 
@@ -674,7 +689,7 @@ def test_narration_falls_back_to_description_when_computed_narration_also_empty(
     with patch(
         "app.services.automation_engine.sheets_client.get_column_values", return_value=set()
     ), patch(
-        "app.services.automation_engine.classifier.master_repository.find_party", return_value=None
+        "app.services.automation_engine.classifier.master_repository.find_party_candidates", return_value=[]
     ):
         transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
 
@@ -837,7 +852,7 @@ def test_duplicate_detection_matches_pretty_narration_format():
         "app.services.automation_engine.sheets_client.get_column_values",
         side_effect=fake_get_column_values,
     ), patch("app.services.automation_engine.ledger_repository.log_audit"), patch(
-        "app.services.automation_engine.classifier.master_repository.find_party", return_value=None
+        "app.services.automation_engine.classifier.master_repository.find_party_candidates", return_value=[]
     ):
         transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
 
@@ -870,7 +885,7 @@ def test_duplicate_detection_matches_old_raw_description_format():
         "app.services.automation_engine.sheets_client.get_column_values",
         side_effect=fake_get_column_values,
     ), patch("app.services.automation_engine.ledger_repository.log_audit"), patch(
-        "app.services.automation_engine.classifier.master_repository.find_party", return_value=None
+        "app.services.automation_engine.classifier.master_repository.find_party_candidates", return_value=[]
     ):
         transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
 
@@ -901,7 +916,7 @@ def test_genuinely_new_reference_is_not_flagged_duplicate():
         "app.services.automation_engine.sheets_client.get_column_values",
         side_effect=fake_get_column_values,
     ), patch(
-        "app.services.automation_engine.classifier.master_repository.find_party", return_value=None
+        "app.services.automation_engine.classifier.master_repository.find_party_candidates", return_value=[]
     ):
         transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
 
@@ -951,8 +966,8 @@ def test_process_rows_expands_ho_business_unit():
         "app.services.automation_engine.sheets_client.get_column_values",
         return_value=set(),
     ), patch(
-        "app.services.automation_engine.classifier.master_repository.find_party",
-        return_value={"Account Head": "Rakiba BIBI", "Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS"},
+        "app.services.automation_engine.classifier.master_repository.find_party_candidates",
+        return_value=[{"Account Head": "Rakiba BIBI", "Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS"}],
     ):
         transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
 
@@ -982,8 +997,8 @@ def test_contractor_head_with_blank_master_description_still_routes_to_receipt_p
         "app.services.automation_engine.sheets_client.get_column_values",
         return_value=set(),
     ), patch(
-        "app.services.automation_engine.classifier.master_repository.find_party",
-        return_value={"Account Head": "Rajesh Kumar", "Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS"},
+        "app.services.automation_engine.classifier.master_repository.find_party_candidates",
+        return_value=[{"Account Head": "Rajesh Kumar", "Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS"}],
     ):
         transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
 
@@ -1018,8 +1033,8 @@ def test_collection_head_is_skipped_not_routed_to_review():
         "app.services.automation_engine.sheets_client.get_column_values",
         return_value=set(),
     ), patch(
-        "app.services.automation_engine.classifier.master_repository.find_party",
-        return_value=None,
+        "app.services.automation_engine.classifier.master_repository.find_party_candidates",
+        return_value=[],
     ):
         transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
 
@@ -1085,8 +1100,8 @@ def test_collection_head_transaction_is_skipped_entirely():
         "app.services.automation_engine.sheets_client.get_column_values",
         return_value=set(),
     ), patch(
-        "app.services.automation_engine.classifier.master_repository.find_party",
-        return_value=None,
+        "app.services.automation_engine.classifier.master_repository.find_party_candidates",
+        return_value=[],
     ):
         transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
 
@@ -1565,3 +1580,172 @@ def test_clear_destination_data_rejects_unknown_target():
         assert False, "expected ValueError"
     except ValueError as exc:
         assert "everything" in str(exc)
+
+
+# --- _attach_ambiguous_dropdowns: the dropdown step is compulsory, not
+# best-effort, for every ambiguous transaction that got written ---
+
+
+def _ambiguous_txn(candidates, destination="receipt_payment", link_ref_code=42):
+    txn = _receipt_payment_txn("Vendor", candidates[0])
+    txn.classification.account_head_ambiguous = True
+    txn.classification.account_head_candidates = candidates
+    txn.destination = destination
+    txn.rows = {"LedgerDetails": [{"Link Ref Code": link_ref_code}]}
+    return txn
+
+
+_CANDIDATES = [
+    {"Account Head": "RAJESH KUMAR", "Parent Account Head": "SUNDRY CREDITORS - OTHER"},
+    {"Account Head": "RAJESH KUMAR", "Parent Account Head": "GENERAL CATEGORY-FLATS"},
+]
+
+
+def test_attach_ambiguous_dropdowns_calls_add_dropdown_for_every_ambiguous_transaction():
+    txn = _ambiguous_txn(_CANDIDATES)
+
+    with patch(
+        "app.services.automation_engine.sheets_client.find_row_number", return_value=5
+    ), patch(
+        "app.services.automation_engine.sheets_client.add_dropdown_validation"
+    ) as mock_add:
+        _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")
+
+    mock_add.assert_called_once_with(
+        "rp-sheet-id", "LedgerDetails", 5, "Parent Account Head",
+        ["SUNDRY CREDITORS - OTHER", "GENERAL CATEGORY-FLATS"],
+    )
+
+
+def test_attach_ambiguous_dropdowns_skips_non_ambiguous_transactions():
+    txn = _receipt_payment_txn("Vendor", {"Account Head": "X", "Parent Account Head": "Y"})
+    txn.rows = {"LedgerDetails": [{"Link Ref Code": 1}]}
+
+    with patch(
+        "app.services.automation_engine.sheets_client.find_row_number"
+    ) as mock_find, patch(
+        "app.services.automation_engine.sheets_client.add_dropdown_validation"
+    ) as mock_add:
+        _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")
+
+    mock_find.assert_not_called()
+    mock_add.assert_not_called()
+
+
+def test_attach_ambiguous_dropdowns_retries_once_then_logs_error_on_final_failure():
+    txn = _ambiguous_txn(_CANDIDATES)
+
+    with patch(
+        "app.services.automation_engine.sheets_client.find_row_number", return_value=5
+    ), patch(
+        "app.services.automation_engine.sheets_client.add_dropdown_validation",
+        side_effect=RuntimeError("Sheets API hiccup"),
+    ) as mock_add, patch(
+        "app.services.automation_engine.ledger_repository.log_audit"
+    ) as mock_log:
+        _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")
+
+    # Retried once (2 attempts total) before giving up.
+    assert mock_add.call_count == 2
+    mock_log.assert_called_once()
+    assert mock_log.call_args.args[1] == "error"
+
+
+def test_attach_ambiguous_dropdowns_recovers_on_retry():
+    txn = _ambiguous_txn(_CANDIDATES)
+
+    with patch(
+        "app.services.automation_engine.sheets_client.find_row_number", return_value=5
+    ), patch(
+        "app.services.automation_engine.sheets_client.add_dropdown_validation",
+        side_effect=[RuntimeError("transient"), None],
+    ) as mock_add, patch(
+        "app.services.automation_engine.ledger_repository.log_audit"
+    ) as mock_log:
+        _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")
+
+    assert mock_add.call_count == 2
+    mock_log.assert_not_called()
+
+
+def test_attach_ambiguous_dropdowns_failure_never_raises():
+    # The write to sheets has already happened by the time this step runs -
+    # a dropdown-attachment failure must never propagate and break the run.
+    txn = _ambiguous_txn(_CANDIDATES)
+
+    with patch(
+        "app.services.automation_engine.sheets_client.find_row_number", return_value=5
+    ), patch(
+        "app.services.automation_engine.sheets_client.add_dropdown_validation",
+        side_effect=RuntimeError("permanent failure"),
+    ), patch(
+        "app.services.automation_engine.ledger_repository.log_audit"
+    ):
+        _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")  # must not raise
+
+
+def test_attach_ambiguous_dropdowns_skips_when_row_not_found_and_logs_error():
+    txn = _ambiguous_txn(_CANDIDATES)
+
+    with patch(
+        "app.services.automation_engine.sheets_client.find_row_number", return_value=None
+    ), patch(
+        "app.services.automation_engine.sheets_client.add_dropdown_validation"
+    ) as mock_add:
+        _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")
+
+    mock_add.assert_not_called()
+
+
+def test_attach_ambiguous_dropdowns_skips_deposit_withdrawal_destination():
+    # Deposit/Withdrawal's LedgerDetails Account Head is the counterparty
+    # bank name, not a beneficiary head - never eligible for this dropdown.
+    txn = _ambiguous_txn(_CANDIDATES, destination="deposit_withdrawal")
+
+    with patch(
+        "app.services.automation_engine.sheets_client.find_row_number"
+    ) as mock_find:
+        _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")
+
+    mock_find.assert_not_called()
+
+
+# --- History index build (threaded into classify_transaction) ---
+
+
+def test_process_rows_builds_and_threads_history_index():
+    bank_rows = [
+        {
+            "SL#": "1",
+            "REFERENCE": "REF-HIST-1",
+            "DESCRIPTION": "YIB-NEFT-YESME999-Rajesh Kumar-SBIN0007204-STATE BANK OF INDIA",
+            "TXN DATE": "22-Jul-2026",
+            "DEBITS": "1000",
+            "CREDITS": "",
+            "BUSINESS UNIT": "Casa Romana",
+            "source_sheet": "YES AH IDW 2457",
+        }
+    ]
+
+    def fake_get_columns(sheet_id, worksheet_name, columns):
+        return [("Rajesh Kumar", "RAJESH KUMAR", "SUNDRY CREDITORS - OTHER")]
+
+    with patch(
+        "app.services.automation_engine.sheets_client.get_column_values", return_value=set()
+    ), patch(
+        "app.services.automation_engine.sheets_client.get_columns", side_effect=fake_get_columns
+    ), patch(
+        "app.services.automation_engine.classifier.master_repository.find_party_candidates",
+        return_value=[
+            {"Account Head": "RAJESH KUMAR", "Parent Account Head": "SUNDRY CREDITORS - OTHER"},
+            {"Account Head": "RAJESH KUMAR", "Parent Account Head": "GENERAL CATEGORY-FLATS"},
+        ],
+    ):
+        transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
+
+    assert len(transactions) == 1
+    txn = transactions[0]
+    # History has exactly one prior write for this payee (SUNDRY CREDITORS -
+    # OTHER) - resolves unambiguously via historical majority, not flagged.
+    assert txn.classification.account_head_ambiguous is False
+    assert txn.classification.matched_master_row["Parent Account Head"] == "SUNDRY CREDITORS - OTHER"

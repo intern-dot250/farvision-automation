@@ -1,3 +1,4 @@
+from collections import Counter
 from unittest.mock import patch
 
 from app.services.classifier import classify_transaction
@@ -35,11 +36,11 @@ def test_internal_transfer_still_looks_up_master_for_bank_name():
 
 
 def test_matched_payee_classified_by_parent_account_head():
-    with patch("app.services.classifier.master_repository.find_party") as mock_find:
-        mock_find.return_value = {
+    with patch("app.services.classifier.master_repository.find_party_candidates") as mock_find:
+        mock_find.return_value = [{
             "Account Head": "MUKESH KUMAR",
             "Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS",
-        }
+        }]
 
         result = classify_transaction(
             "YIB-NEFT-YESME62030018553-Mukesh Kumar-KVBL0004201-Contractor-KARUR VYSYA BANK"
@@ -49,11 +50,12 @@ def test_matched_payee_classified_by_parent_account_head():
     assert result.head == "Contractor"
     assert result.needs_review is False
     assert result.matched_master_row is not None
+    assert result.account_head_ambiguous is False
 
 
 def test_unmatched_external_payee_routes_to_unclassified():
-    with patch("app.services.classifier.master_repository.find_party") as mock_find:
-        mock_find.return_value = None
+    with patch("app.services.classifier.master_repository.find_party_candidates") as mock_find:
+        mock_find.return_value = []
 
         result = classify_transaction(
             "YIB-NEFT-YESME99999999999-Unknown Payee-SBIN0007204-STATE BANK OF INDIA"
@@ -66,11 +68,11 @@ def test_unmatched_external_payee_routes_to_unclassified():
 
 
 def test_existing_head_is_trusted_over_derived_label():
-    with patch("app.services.classifier.master_repository.find_party") as mock_find:
-        mock_find.return_value = {
+    with patch("app.services.classifier.master_repository.find_party_candidates") as mock_find:
+        mock_find.return_value = [{
             "Account Head": "MUKESH KUMAR",
             "Parent Account Head": "SUNDRY CREDITORS - PROFESSIONAL FEES",
-        }
+        }]
 
         result = classify_transaction(
             "YIB-NEFT-YESME62030018553-Mukesh Kumar-KVBL0004201-Contractor-KARUR VYSYA BANK",
@@ -105,7 +107,7 @@ def test_trusted_non_internal_head_wins_even_with_no_ifsc_narration():
     # "Bank Charges") - a trusted head must always win over the
     # narration-shape heuristic, which is only for rows with no trusted
     # head at all.
-    with patch("app.services.classifier.master_repository.find_party", return_value=None):
+    with patch("app.services.classifier.master_repository.find_party_candidates", return_value=[]):
         result = classify_transaction("POS GST", existing_head="Bank Charges")
 
     assert result.is_internal is False
@@ -117,8 +119,8 @@ def test_existing_head_with_no_master_match_still_routes_without_review():
     # A trusted, non-Internal head from the statement (Contractor/Vendor/...)
     # is enough on its own to route to Receipt/Payment - it shouldn't need
     # review just because Master doesn't happen to have this payee.
-    with patch("app.services.classifier.master_repository.find_party") as mock_find:
-        mock_find.return_value = None
+    with patch("app.services.classifier.master_repository.find_party_candidates") as mock_find:
+        mock_find.return_value = []
 
         result = classify_transaction(
             "YIB-NEFT-YESME99999999999-Unknown Payee-SBIN0007204-STATE BANK OF INDIA",
@@ -201,7 +203,7 @@ def test_plain_name_description_with_no_master_match_routes_to_unclassified():
     # No Master match → route to receipt_payment with Unclassified head
     # (no longer blocked in Review). The Accounts team can correct the head
     # manually in the ERP if needed.
-    with patch("app.services.classifier.master_repository.find_party", return_value=None):
+    with patch("app.services.classifier.master_repository.find_party_candidates", return_value=[]):
         result = classify_transaction("VIJAY YADAV")
 
     assert result.is_internal is False
@@ -214,7 +216,7 @@ def test_plain_name_description_with_no_master_match_routes_to_unclassified():
 
 
 def test_source_sheet_resolves_company_and_threads_into_master_lookup():
-    with patch("app.services.classifier.master_repository.find_party", return_value=None) as mock_find:
+    with patch("app.services.classifier.master_repository.find_party_candidates", return_value=[]) as mock_find:
         classify_transaction("VIJAY YADAV", source_sheet="YES AH IDW 2457")
 
     mock_find.assert_called_once_with("VIJAY YADAV", company="DPL")
@@ -224,7 +226,72 @@ def test_no_source_sheet_still_defaults_to_dpl():
     # No source_sheet (e.g. running against the plain configured Sheet) -
     # resolve_company() still defaults to "DPL", the only company currently
     # processed, so this doesn't change existing behavior.
-    with patch("app.services.classifier.master_repository.find_party", return_value=None) as mock_find:
+    with patch("app.services.classifier.master_repository.find_party_candidates", return_value=[]) as mock_find:
         classify_transaction("VIJAY YADAV")
 
     mock_find.assert_called_once_with("VIJAY YADAV", company="DPL")
+
+
+# --- Account Head ambiguity (multiple Master rows for one beneficiary) ---
+
+
+def test_ambiguous_beneficiary_with_no_signal_is_flagged_not_first_row():
+    # Two genuinely different candidates, no history/narration signal to
+    # break the tie - must be flagged ambiguous, not silently resolved to
+    # whichever row happened to come first.
+    candidates = [
+        {"Account Head": "RAJESH KUMAR", "Parent Account Head": "SUNDRY CREDITORS - OTHER"},
+        {"Account Head": "RAJESH KUMAR", "Parent Account Head": "GENERAL CATEGORY-FLATS"},
+    ]
+    with patch("app.services.classifier.master_repository.find_party_candidates", return_value=candidates):
+        result = classify_transaction("RAJESH KUMAR")
+
+    assert result.account_head_ambiguous is True
+    assert result.account_head_candidates is not None
+    assert len(result.account_head_candidates) == 2
+    assert result.matched_master_row in candidates
+
+
+def test_ambiguous_beneficiary_resolved_by_narration_context():
+    candidates = [
+        {"Account Head": "RAJESH KUMAR", "Parent Account Head": "SUNDRY CREDITORS - OTHER"},
+        {"Account Head": "RAJESH KUMAR", "Parent Account Head": "ADVANCE FROM CUSTOMER (INVESTOR)"},
+    ]
+    with patch("app.services.classifier.master_repository.find_party_candidates", return_value=candidates):
+        result = classify_transaction(
+            "RAJESH KUMAR", context_text="Purpose: Investor advance refund"
+        )
+
+    assert result.account_head_ambiguous is False
+    assert result.matched_master_row["Parent Account Head"] == "ADVANCE FROM CUSTOMER (INVESTOR)"
+
+
+def test_ambiguous_beneficiary_resolved_by_history():
+    candidates = [
+        {"Account Head": "RAJESH KUMAR", "Parent Account Head": "SUNDRY CREDITORS - OTHER"},
+        {"Account Head": "RAJESH KUMAR", "Parent Account Head": "GENERAL CATEGORY-FLATS"},
+    ]
+    history = {"RAJESH KUMAR": Counter({("RAJESH KUMAR", "SUNDRY CREDITORS - OTHER"): 5})}
+    with patch("app.services.classifier.master_repository.find_party_candidates", return_value=candidates):
+        result = classify_transaction("RAJESH KUMAR", history=history)
+
+    assert result.account_head_ambiguous is False
+    assert result.matched_master_row["Parent Account Head"] == "SUNDRY CREDITORS - OTHER"
+
+
+def test_ambiguous_beneficiary_history_tie_falls_through_not_forced():
+    # History split evenly across 2+ candidates - must not force a pick.
+    candidates = [
+        {"Account Head": "RAJESH KUMAR", "Parent Account Head": "SUNDRY CREDITORS - OTHER"},
+        {"Account Head": "RAJESH KUMAR", "Parent Account Head": "GENERAL CATEGORY-FLATS"},
+    ]
+    history = {
+        "RAJESH KUMAR": Counter({
+            ("RAJESH KUMAR", "SUNDRY CREDITORS - OTHER"): 3,
+            ("RAJESH KUMAR", "GENERAL CATEGORY-FLATS"): 3,
+        })
+    }
+    with patch("app.services.classifier.master_repository.find_party_candidates", return_value=candidates):
+        result = classify_transaction("RAJESH KUMAR", history=history)
+
+    assert result.account_head_ambiguous is True

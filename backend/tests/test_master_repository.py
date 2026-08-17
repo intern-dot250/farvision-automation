@@ -323,6 +323,60 @@ def test_find_deduction_for_head_returns_paired_deduction_type_and_description(m
     assert result == ("Tax deducted at source", "TDS ON SALARY")
 
 
+def test_find_party_candidates_returns_all_matching_rows(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [
+            {"Company": "DPL", "Payee Name": "RAJESH KUMAR", "Account Head": "RAJESH KUMAR", "Parent Account Head": "SUNDRY CREDITORS - OTHER"},
+            {"Company": "DPL", "Payee Name": "RAJESH KUMAR", "Account Head": "RAJESH KUMAR", "Parent Account Head": "GENERAL CATEGORY-FLATS"},
+            {"Company": "DPL", "Payee Name": "RAJESH KUMAR", "Account Head": "RAJESH KUMAR", "Parent Account Head": "ADVANCE FROM CUSTOMER (INVESTOR)"},
+        ]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    candidates = master_repository.find_party_candidates("Rajesh Kumar", company="DPL")
+
+    assert len(candidates) == 3
+    assert {c["Parent Account Head"] for c in candidates} == {
+        "SUNDRY CREDITORS - OTHER", "GENERAL CATEGORY-FLATS", "ADVANCE FROM CUSTOMER (INVESTOR)",
+    }
+
+
+def test_find_party_candidates_returns_single_row_for_unique_match(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [{"Payee Name": "MUKESH KUMAR", "Account Head": "MUKESH KUMAR", "Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS"}]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    candidates = master_repository.find_party_candidates("Mukesh Kumar")
+
+    assert len(candidates) == 1
+
+
+def test_find_party_candidates_returns_empty_list_for_no_match(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [{"Payee Name": "MUKESH KUMAR", "Account Head": "MUKESH KUMAR"}]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    assert master_repository.find_party_candidates("Totally Unrelated") == []
+    assert master_repository.find_party_candidates(None) == []
+
+
+def test_find_party_candidates_scoped_by_company(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [
+            {"Company": "DPL", "Payee Name": "ANITA DEVI", "Account Head": "ANITA DEVI", "Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS"},
+            {"Company": "AMB", "Payee Name": "ANITA DEVI", "Account Head": "ANITA DEVI", "Parent Account Head": "SUNDRY CREDITORS - OTHER"},
+        ]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    dpl_candidates = master_repository.find_party_candidates("ANITA DEVI", company="DPL")
+
+    assert len(dpl_candidates) == 1
+    assert dpl_candidates[0]["Parent Account Head"] == "SUNDRY CREDITORS - CONTRACTORS"
+
+
 def test_find_deduction_for_head_returns_none_when_no_category_match(monkeypatch):
     df = pd.DataFrame.from_records(
         [
