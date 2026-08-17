@@ -243,6 +243,20 @@ def test_ledger_details_parent_account_head_falls_back_to_trusted_head():
     assert rows["LedgerDetails"][0]["Parent Account Head"] == "Vendor"
 
 
+def test_receipt_payment_ledger_details_payment_mode_is_direct():
+    txn = _receipt_payment_txn("Vendor", {})
+    rows = _build_receipt_payment_rows(txn, link_ref_code=4)
+
+    assert rows["LedgerDetails"][0]["Payment Mode"] == "Direct"
+
+
+def test_deposit_withdrawal_ledger_details_payment_mode_is_direct():
+    txn = _internal_txn("DWARKADHIS PROJECTS PVT LTD")
+    rows = _build_deposit_withdrawal_rows(txn, link_ref_code=1)
+
+    assert rows["LedgerDetails"][0]["Payment Mode"] == "Direct"
+
+
 def test_ledger_details_account_head_and_payee_name_fall_back_to_head_when_no_payee_name():
     # "POS GST"-style narrations (Bank Charges, etc.) have no extractable
     # payee name and no Master match - Account Head/Payee Name must still
