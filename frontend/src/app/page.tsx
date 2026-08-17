@@ -17,7 +17,6 @@ export default function DashboardPage() {
   const [statsError, setStatsError] = useState(false);
   const [sheetLinks, setSheetLinks] = useState<Record<string, string>>({});
   const [file, setFile] = useState<File | null>(null);
-  const [dryRun, setDryRun] = useState(true);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<RunResponse | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
@@ -81,7 +80,7 @@ export default function DashboardPage() {
       .finally(() => setSheetOptionsLoading(false));
   };
 
-  const handleRun = async () => {
+  const handleRun = async (dryRun: boolean) => {
     if (!file) return;
 
     setRunning(true);
@@ -262,27 +261,22 @@ export default function DashboardPage() {
             </div>
           )}
 
-          <label className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-400">
-            <input
-              type="checkbox"
-              checked={dryRun}
-              onChange={(e) => setDryRun(e.target.checked)}
-              disabled={running}
-            />
-            Dry run (preview only, no writes to Google Sheets)
-          </label>
-
-          <button
-            onClick={handleRun}
-            disabled={running || !file}
-            className="w-fit rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
-          >
-            {running
-              ? "Processing..."
-              : dryRun
-                ? "Preview Upload"
-                : "Upload & Write to Sheets"}
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={() => handleRun(true)}
+              disabled={running || !file}
+              className="w-fit rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+            >
+              {running ? "Processing..." : "Preview Upload"}
+            </button>
+            <button
+              onClick={() => handleRun(false)}
+              disabled={running || !file}
+              className="w-fit rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700 disabled:opacity-50 dark:bg-emerald-500 dark:hover:bg-emerald-600"
+            >
+              {running ? "Processing..." : "Write to Google Sheets"}
+            </button>
+          </div>
 
           {running && (
             <div className="flex flex-col gap-1">
