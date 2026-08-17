@@ -259,8 +259,11 @@ def _resolve_import_tax_description(matched: dict, deduction_type: str, default:
 def _build_import_tax_info_rows(txn: TransactionRowSet, link_ref_code: int, matched: dict) -> list[dict]:
     """Every Receipt/Payment transaction gets a matching ImportTaxInfo row on
     the same Link Ref Code, so the tab tracks 1:1 with ReceiptPayment.
-    Contractor payments get both a TDS row and a GST row; Vendor payments
-    get only the GST row; every other head keeps a single Master-driven row.
+    Contractor payments get a TDS row plus a second, deliberately blank row
+    (Contractor payments have no real GST data of their own, unlike Vendor -
+    the row stays present to keep the 2-rows-per-Contractor-transaction
+    shape, but nothing is written into it); Vendor payments get only the GST
+    row; every other head keeps a single Master-driven row.
 
     Contractor/Vendor already know their Deduction Type, so only the
     Description needs resolving (own Master row, then same-category
@@ -275,12 +278,9 @@ def _build_import_tax_info_rows(txn: TransactionRowSet, link_ref_code: int, matc
         tds_description = _resolve_import_tax_description(
             matched, "Tax deducted at source", default=_CONTRACTOR_DEFAULT_DESCRIPTION
         )
-        gst_description = _resolve_import_tax_description(
-            matched, "Goods and Service Tax", default=_CONTRACTOR_DEFAULT_DESCRIPTION
-        )
         return [
             {**base, "Deduction Type": "Tax deducted at source", "Description": tds_description},
-            {**base, "Deduction Type": "Goods and Service Tax", "Description": gst_description},
+            {**base, "Deduction Type": "", "Description": ""},
         ]
     if txn.classification.head == "Vendor":
         description = _resolve_import_tax_description(matched, "Goods and Service Tax")

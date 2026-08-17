@@ -287,8 +287,10 @@ def test_contractor_head_gets_two_import_tax_info_rows():
     assert len(tax_rows) == 2
     assert tax_rows[0]["Deduction Type"] == "Tax deducted at source"
     assert tax_rows[0]["Description"] == "TDS ON CONTRACTORS"
-    assert tax_rows[1]["Deduction Type"] == "Goods and Service Tax"
-    assert tax_rows[1]["Description"] == "TDS ON CONTRACTORS"
+    # Contractor payments have no real GST data of their own - the second
+    # row stays present (keeping the 2-rows-per-Contractor shape) but blank.
+    assert tax_rows[1]["Deduction Type"] == ""
+    assert tax_rows[1]["Description"] == ""
     for row in tax_rows:
         assert row["Link Ref Code"] == 7
         assert row["Detail Link Ref Code"] == 7
@@ -347,7 +349,8 @@ def test_contractor_with_empty_description_defaults_to_tds_on_contractors():
     # A missing Master Description (and no same-category fallback match) no
     # longer suppresses the row nor leaves it blank - every Contractor
     # payment is a TDS-on-contractor deduction by definition, so it defaults
-    # to that fixed text as the last resort.
+    # to that fixed text as the last resort. The second row stays blank
+    # regardless, since Contractor payments have no real GST data.
     txn = _receipt_payment_txn("Contractor", {})
     rows = _build_receipt_payment_rows(txn, link_ref_code=8)
 
@@ -355,8 +358,8 @@ def test_contractor_with_empty_description_defaults_to_tds_on_contractors():
     assert len(tax_rows) == 2
     assert tax_rows[0]["Deduction Type"] == "Tax deducted at source"
     assert tax_rows[0]["Description"] == "TDS ON CONTRACTORS"
-    assert tax_rows[1]["Deduction Type"] == "Goods and Service Tax"
-    assert tax_rows[1]["Description"] == "TDS ON CONTRACTORS"
+    assert tax_rows[1]["Deduction Type"] == ""
+    assert tax_rows[1]["Description"] == ""
 
 
 def test_vendor_with_empty_description_still_emits_import_tax_info_row():
@@ -383,32 +386,27 @@ def test_contractor_with_blank_description_falls_back_to_same_category_descripti
     # When the payee's own Master row has no Description, reuse the
     # Description from another Master row sharing the same Account
     # Head/Parent Account Head AND the same Deduction Type
-    # (master_repository.find_description_for_head) - each row's fallback
-    # lookup is keyed to its own Deduction Type so a TDS Description can't
-    # leak onto the GST row or vice versa.
+    # (master_repository.find_description_for_head) - only the TDS row
+    # looks anything up; the second row is always blank, since Contractor
+    # payments have no real GST data of their own.
     txn = _receipt_payment_txn(
         "Contractor",
         {"Account Head": "NAVEEN YADAV", "Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS"},
     )
 
-    def fake_fallback(account_head, parent_account_head, deduction_type):
-        return {
-            "Tax deducted at source": "TDS ON CONTRACTORS",
-            "Goods and Service Tax": "GST ON CONTRACTORS",
-        }[deduction_type]
-
     with patch(
         "app.services.automation_engine.master_repository.find_description_for_head",
-        side_effect=fake_fallback,
+        return_value="TDS ON CONTRACTORS",
     ) as mock_fallback:
         rows = _build_receipt_payment_rows(txn, link_ref_code=11)
 
-    assert mock_fallback.call_count == 2
-    mock_fallback.assert_any_call("NAVEEN YADAV", "SUNDRY CREDITORS - CONTRACTORS", "Tax deducted at source")
-    mock_fallback.assert_any_call("NAVEEN YADAV", "SUNDRY CREDITORS - CONTRACTORS", "Goods and Service Tax")
+    mock_fallback.assert_called_once_with(
+        "NAVEEN YADAV", "SUNDRY CREDITORS - CONTRACTORS", "Tax deducted at source"
+    )
     tax_rows = rows["ImportTaxInfo"]
     assert tax_rows[0]["Description"] == "TDS ON CONTRACTORS"
-    assert tax_rows[1]["Description"] == "GST ON CONTRACTORS"
+    assert tax_rows[1]["Deduction Type"] == ""
+    assert tax_rows[1]["Description"] == ""
 
 
 def test_vendor_with_blank_description_falls_back_to_same_category_gst_description():
