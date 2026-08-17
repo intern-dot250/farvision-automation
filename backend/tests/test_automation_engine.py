@@ -1808,3 +1808,42 @@ def test_process_rows_builds_and_threads_history_index():
     # OTHER) - resolves unambiguously via historical majority, not flagged.
     assert txn.classification.account_head_ambiguous is False
     assert txn.classification.matched_master_row["Parent Account Head"] == "SUNDRY CREDITORS - OTHER"
+
+
+# --- Master cache freshness ---
+
+
+def test_run_automation_stream_clears_master_cache_before_processing():
+    # A long-lived warm serverless instance must never keep serving a stale
+    # in-memory Master snapshot across runs - each run has to force a fresh
+    # read before classifying anything.
+    from app.services import automation_engine as engine_module
+
+    bank_rows = [
+        {
+            "SL#": "1",
+            "REFERENCE": "REF-CACHE-1",
+            "DESCRIPTION": "YIB-NEFT-REFCACHE1-Some Vendor-SBIN0007204-Vendor-STATE BANK OF INDIA",
+            "TXN DATE": "22-Jul-2026",
+            "DEBITS": "1000",
+            "CREDITS": "",
+            "BUSINESS UNIT": "Casa Romana",
+            "source_sheet": "YES AH IDW 2457",
+        }
+    ]
+
+    with patch(
+        "app.services.automation_engine.sheets_client.get_column_values", return_value=set()
+    ), patch(
+        "app.services.automation_engine.classifier.master_repository.find_party_candidates",
+        return_value=[],
+    ), patch(
+        "app.services.automation_engine.master_repository.clear_cache"
+    ) as mock_clear, patch(
+        "app.services.automation_engine.ref_code.get_next_ref_code", return_value=1
+    ), patch(
+        "app.services.automation_engine.override_rules_repository.list_active", return_value=[]
+    ):
+        list(engine_module.run_automation_stream(dry_run=True, rows=bank_rows))
+
+    mock_clear.assert_called_once()

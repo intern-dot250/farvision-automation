@@ -879,6 +879,15 @@ def run_automation_stream(dry_run: bool = True, rows: list[dict] | None = None):
         {"dry_run": dry_run, "source": "upload" if rows is not None else "sheet", "sheet_names": sheet_names},
     )
 
+    # Master is cached in-process (master_repository._load_master_df, via
+    # lru_cache) for cheap repeated lookups within a run - but on a
+    # long-lived warm serverless instance that cache can silently outlive
+    # real edits made directly in the Google Sheet (a new vendor, a
+    # corrected Parent Account Head), for an unpredictable stretch of time.
+    # Force a fresh read at the start of every run so classification always
+    # sees the current state of Master, not a stale snapshot.
+    master_repository.clear_cache()
+
     yield {"type": "progress", "stage": "classifying", "processed": 0, "total": total}
 
     gen = _process_rows_stream(bank_rows, run_id, settings)
