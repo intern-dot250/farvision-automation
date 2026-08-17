@@ -5,8 +5,11 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { getStats, type StatsSummary } from "@/lib/api/history";
 import {
+  clearSheetData,
   getSheetNames,
   runAutomationUploadStream,
+  type ClearSheetApiResponse,
+  type ClearSheetTarget,
   type RunResponse,
   type UploadProgress,
 } from "@/lib/api/automation";
@@ -27,6 +30,13 @@ export default function DashboardPage() {
   const [ignoredSheets, setIgnoredSheets] = useState<string[]>([]);
   const [showIgnored, setShowIgnored] = useState(false);
   const [progress, setProgress] = useState<UploadProgress | null>(null);
+
+  const [showClearPanel, setShowClearPanel] = useState(false);
+  const [clearTarget, setClearTarget] = useState<ClearSheetTarget>("receipt_payment");
+  const [clearConfirmText, setClearConfirmText] = useState("");
+  const [clearing, setClearing] = useState(false);
+  const [clearResult, setClearResult] = useState<ClearSheetApiResponse | null>(null);
+  const [clearError, setClearError] = useState<string | null>(null);
 
   const loadStats = () => {
     getStats()
@@ -103,6 +113,25 @@ export default function DashboardPage() {
     } finally {
       setRunning(false);
       setProgress(null);
+    }
+  };
+
+  const handleClearSheets = async () => {
+    if (clearConfirmText !== "DELETE") return;
+
+    setClearing(true);
+    setClearError(null);
+    setClearResult(null);
+    try {
+      const response = await clearSheetData(clearTarget);
+      setClearResult(response);
+      setShowClearPanel(false);
+      setClearConfirmText("");
+      loadStats();
+    } catch (err) {
+      setClearError(err instanceof Error ? err.message : "Clear failed");
+    } finally {
+      setClearing(false);
     }
   };
 
@@ -276,7 +305,94 @@ export default function DashboardPage() {
             >
               {running ? "Processing..." : "Write to Google Sheets"}
             </button>
+            <button
+              onClick={() => {
+                setShowClearPanel((v) => !v);
+                setClearConfirmText("");
+                setClearError(null);
+              }}
+              disabled={running || clearing}
+              className="w-fit rounded-md border border-red-600 px-4 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-50 disabled:opacity-50 dark:border-red-500 dark:text-red-500 dark:hover:bg-red-950/40"
+            >
+              Clear Sheet Data
+            </button>
           </div>
+
+          {showClearPanel && (
+            <div className="flex flex-col gap-3 rounded-md border border-red-300 bg-red-50 p-4 dark:border-red-900 dark:bg-red-950/30">
+              <p className="text-sm font-medium text-red-800 dark:text-red-300">
+                This permanently erases every row (all tabs except Info) in
+                the selected sheet. This cannot be undone from this app.
+              </p>
+
+              <label className="flex flex-col gap-1">
+                <span className="text-sm text-zinc-700 dark:text-zinc-300">
+                  Sheet to erase
+                </span>
+                <select
+                  value={clearTarget}
+                  onChange={(e) => setClearTarget(e.target.value as ClearSheetTarget)}
+                  disabled={clearing}
+                  className="w-fit rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+                >
+                  <option value="receipt_payment">Receipt / Payment</option>
+                  <option value="deposit_withdrawal">Deposit / Withdrawal</option>
+                  <option value="both">Both</option>
+                </select>
+              </label>
+
+              <label className="flex flex-col gap-1">
+                <span className="text-sm text-zinc-700 dark:text-zinc-300">
+                  Type <span className="font-mono font-semibold">DELETE</span> to confirm
+                </span>
+                <input
+                  type="text"
+                  value={clearConfirmText}
+                  onChange={(e) => setClearConfirmText(e.target.value)}
+                  disabled={clearing}
+                  placeholder="DELETE"
+                  className="w-48 rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+                />
+              </label>
+
+              <div className="flex gap-2">
+                <button
+                  onClick={handleClearSheets}
+                  disabled={clearing || clearConfirmText !== "DELETE"}
+                  className="w-fit rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:opacity-50"
+                >
+                  {clearing ? "Erasing..." : "Confirm Erase"}
+                </button>
+                <button
+                  onClick={() => {
+                    setShowClearPanel(false);
+                    setClearConfirmText("");
+                  }}
+                  disabled={clearing}
+                  className="w-fit rounded-md border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {clearError && (
+            <p className="text-sm text-red-600 dark:text-red-400">{clearError}</p>
+          )}
+
+          {clearResult && (
+            <div className="flex flex-col gap-1 rounded-md border border-zinc-200 p-3 text-sm dark:border-zinc-800">
+              <span className="font-medium text-zinc-900 dark:text-zinc-100">
+                Cleared successfully:
+              </span>
+              {clearResult.sheets_cleared.map((s) => (
+                <span key={s.sheet} className="text-zinc-600 dark:text-zinc-400">
+                  {s.sheet}: {s.tabs_cleared.join(", ")}
+                </span>
+              ))}
+            </div>
+          )}
 
           {running && (
             <div className="flex flex-col gap-1">

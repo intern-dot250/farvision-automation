@@ -168,3 +168,38 @@ export async function runAutomationUploadStream(
   }
   return finalResult;
 }
+
+export type ClearSheetTarget = "receipt_payment" | "deposit_withdrawal" | "both";
+
+export type ClearedSheet = {
+  sheet: string;
+  tabs_cleared: string[];
+};
+
+export type ClearSheetApiResponse = {
+  target: string;
+  sheets_cleared: ClearedSheet[];
+};
+
+// Unlike every other function in this file, this calls the app's own
+// same-origin /api/clear-sheet route (not the external backend API_BASE_URL
+// directly) - see that route's comment for why: it's the one action in the
+// app that needs a secret the browser must never hold.
+export async function clearSheetData(target: ClearSheetTarget): Promise<ClearSheetApiResponse> {
+  const response = await fetch("/api/clear-sheet", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ target }),
+  });
+
+  const data = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    throw new ApiError(
+      response.status,
+      data?.error ?? `Clear failed with status ${response.status}`,
+    );
+  }
+
+  return data as ClearSheetApiResponse;
+}

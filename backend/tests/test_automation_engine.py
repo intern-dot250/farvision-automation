@@ -12,6 +12,7 @@ from app.services.automation_engine import (
     _format_amount,
     _normalize_business_unit,
     _process_rows,
+    clear_destination_data,
 )
 from app.services.classifier import ClassificationResult
 
@@ -1421,3 +1422,62 @@ def test_assign_rows_one_bad_transaction_does_not_block_the_rest(monkeypatch):
 
     assert good_txn.destination == "receipt_payment"
     assert good_txn.rows["LedgerDetails"][0]["Account Head"] == "Good Txn Head"
+
+
+def test_clear_destination_data_receipt_payment_only(monkeypatch):
+    from app.services import automation_engine as engine_module
+
+    monkeypatch.setattr(engine_module, "get_settings", lambda: _FakeSettings())
+    monkeypatch.setattr(
+        engine_module.sheets_client, "clear_all_tabs",
+        lambda sheet_id: {"rp-sheet-id": ["ReceiptPayment", "LedgerDetails"]}[sheet_id],
+    )
+    with patch("app.services.automation_engine.ledger_repository.log_audit") as mock_log:
+        results = clear_destination_data("receipt_payment")
+
+    assert results == [{"sheet": "Receipt / Payment", "tabs_cleared": ["ReceiptPayment", "LedgerDetails"]}]
+    mock_log.assert_called_once()
+    assert mock_log.call_args.args[1] == "warning"
+
+
+def test_clear_destination_data_deposit_withdrawal_only(monkeypatch):
+    from app.services import automation_engine as engine_module
+
+    monkeypatch.setattr(engine_module, "get_settings", lambda: _FakeSettings())
+    monkeypatch.setattr(
+        engine_module.sheets_client, "clear_all_tabs",
+        lambda sheet_id: {"dw-sheet-id": ["DepositWithdrawal"]}[sheet_id],
+    )
+    with patch("app.services.automation_engine.ledger_repository.log_audit"):
+        results = clear_destination_data("deposit_withdrawal")
+
+    assert results == [{"sheet": "Deposit / Withdrawal", "tabs_cleared": ["DepositWithdrawal"]}]
+
+
+def test_clear_destination_data_both_clears_and_logs_each_sheet_separately(monkeypatch):
+    from app.services import automation_engine as engine_module
+
+    monkeypatch.setattr(engine_module, "get_settings", lambda: _FakeSettings())
+    tabs_by_sheet = {
+        "rp-sheet-id": ["ReceiptPayment"],
+        "dw-sheet-id": ["DepositWithdrawal"],
+    }
+    monkeypatch.setattr(
+        engine_module.sheets_client, "clear_all_tabs", lambda sheet_id: tabs_by_sheet[sheet_id]
+    )
+    with patch("app.services.automation_engine.ledger_repository.log_audit") as mock_log:
+        results = clear_destination_data("both")
+
+    assert results == [
+        {"sheet": "Receipt / Payment", "tabs_cleared": ["ReceiptPayment"]},
+        {"sheet": "Deposit / Withdrawal", "tabs_cleared": ["DepositWithdrawal"]},
+    ]
+    assert mock_log.call_count == 2
+
+
+def test_clear_destination_data_rejects_unknown_target():
+    try:
+        clear_destination_data("everything")
+        assert False, "expected ValueError"
+    except ValueError as exc:
+        assert "everything" in str(exc)

@@ -32,3 +32,13 @@ class SheetNamesResponse(BaseModel):
     sheets: list[str]
     total_sheets: int
     ignored_sheets: list[str]
+
+
+class ClearedSheet(BaseModel):
+    sheet: str
+    tabs_cleared: list[str]
+
+
+class ClearSheetResponse(BaseModel):
+    target: str
+    sheets_cleared: list[ClearedSheet]

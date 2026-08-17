@@ -1,10 +1,18 @@
+import hmac
 import json
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 
+from app.core.config import get_settings
 from app.core.constants import Tags
-from app.schemas.automation import RunResponse, SheetNamesResponse, TransactionSummary
+from app.schemas.automation import (
+    ClearedSheet,
+    ClearSheetResponse,
+    RunResponse,
+    SheetNamesResponse,
+    TransactionSummary,
+)
 from app.services import automation_engine, statement_parser
 
 router = APIRouter(prefix="/automation", tags=[Tags.AUTOMATION])
@@ -122,3 +130,38 @@ async def run_automation_upload_stream(
                 yield json.dumps(event) + "\n"
 
     return StreamingResponse(event_stream(), media_type="application/x-ndjson")
+
+
+def _verify_internal_secret(x_internal_secret: str | None) -> None:
+    """Guards /clear-sheet specifically (the one endpoint in this API that
+    permanently deletes data) - checked against ACCESS_PASSWORD, the same
+    secret already shared between the frontend and backend halves of this
+    Vercel project. Only the frontend's own server-side /api/clear-sheet
+    proxy route (gated by a logged-in dashboard session) knows this value;
+    it's never sent to the browser. Every other endpoint in this API is
+    intentionally left as-is - this is a scoped fix for the most dangerous
+    action, not a full backend-auth overhaul."""
+    expected = get_settings().ACCESS_PASSWORD
+    if not expected or not x_internal_secret or not hmac.compare_digest(x_internal_secret, expected):
+        raise HTTPException(status_code=401, detail="Missing or invalid internal secret")
+
+
+@router.post(
+    "/clear-sheet",
+    response_model=ClearSheetResponse,
+    summary="Permanently erase all data rows (every tab except Info, headers kept) from the Receipt/Payment sheet, the Deposit/Withdrawal sheet, or both",
+)
+def clear_sheet(
+    target: str,
+    x_internal_secret: str | None = Header(default=None),
+) -> ClearSheetResponse:
+    _verify_internal_secret(x_internal_secret)
+
+    if target not in ("receipt_payment", "deposit_withdrawal", "both"):
+        raise HTTPException(status_code=400, detail=f"Unknown target: {target!r}")
+
+    results = automation_engine.clear_destination_data(target)
+    return ClearSheetResponse(
+        target=target,
+        sheets_cleared=[ClearedSheet(**r) for r in results],
+    )

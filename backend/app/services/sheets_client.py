@@ -245,3 +245,27 @@ def append_records(sheet_id: str, worksheet_name: str, records: list[dict]) -> N
     ]
     worksheet.append_rows(rows, value_input_option="RAW")
     _apply_amount_number_format(worksheet, header, worksheet_name)
+
+
+# Never cleared, regardless of which tab-name conventions a spreadsheet uses -
+# holds reference/instructional content, not transaction data.
+_CLEAR_EXCLUDED_WORKSHEETS = {"Info"}
+
+
+def clear_all_tabs(sheet_id: str) -> list[str]:
+    """Erase every data row (row 2 downward) from every tab in this
+    spreadsheet, except "Info" - header row 1 is never touched on any tab.
+
+    Tabs are discovered dynamically from the live spreadsheet rather than a
+    hardcoded list, so this stays correct even if tabs are added later.
+    Returns the list of tab names actually cleared.
+    """
+    spreadsheet = open_sheet(sheet_id)
+    cleared: list[str] = []
+    for worksheet in spreadsheet.worksheets():
+        if worksheet.title in _CLEAR_EXCLUDED_WORKSHEETS:
+            continue
+        last_col_letter = _column_letter(max(worksheet.col_count, 1))
+        worksheet.batch_clear([f"A2:{last_col_letter}"])
+        cleared.append(worksheet.title)
+    return cleared

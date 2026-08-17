@@ -818,3 +818,42 @@ def run_automation(dry_run: bool = True, rows: list[dict] | None = None) -> RunR
         if event["type"] == "result":
             return event["result"]
     raise RuntimeError("run_automation_stream ended without a result event")
+
+
+# Maps a clear-sheet request target to (settings attribute name, human label)
+# pairs - resolved against live settings at call time, not import time.
+_CLEAR_TARGETS: dict[str, list[tuple[str, str]]] = {
+    "receipt_payment": [("RECEIPT_PAYMENT_SHEET_ID", "Receipt / Payment")],
+    "deposit_withdrawal": [("DEPOSIT_WITHDRAWAL_SHEET_ID", "Deposit / Withdrawal")],
+    "both": [
+        ("RECEIPT_PAYMENT_SHEET_ID", "Receipt / Payment"),
+        ("DEPOSIT_WITHDRAWAL_SHEET_ID", "Deposit / Withdrawal"),
+    ],
+}
+
+
+def clear_destination_data(target: str) -> list[dict]:
+    """Erase all transaction rows (every tab except "Info", header row kept)
+    from the Receipt/Payment sheet, the Deposit/Withdrawal sheet, or both -
+    an explicit, user-initiated reset, not part of the normal automation
+    pipeline. Each cleared sheet is audit-logged individually so /logs keeps
+    a permanent record even though the Sheets data itself is gone.
+
+    Returns a list of {"sheet": label, "tabs_cleared": [...]} dicts.
+    """
+    if target not in _CLEAR_TARGETS:
+        raise ValueError(f"Unknown clear-sheet target: {target!r}")
+
+    settings = get_settings()
+    run_id = str(uuid.uuid4())
+    results = []
+    for attr, label in _CLEAR_TARGETS[target]:
+        sheet_id = getattr(settings, attr)
+        tabs_cleared = sheets_client.clear_all_tabs(sheet_id)
+        logger.warning(f"[{run_id}] Cleared sheet data: {label} - tabs: {tabs_cleared}")
+        ledger_repository.log_audit(
+            run_id, "warning", "Cleared sheet data",
+            {"sheet": label, "tabs_cleared": tabs_cleared},
+        )
+        results.append({"sheet": label, "tabs_cleared": tabs_cleared})
+    return results

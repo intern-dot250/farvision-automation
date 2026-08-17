@@ -39,6 +39,13 @@ class Settings(BaseSettings):
     SUPABASE_URL: str = ""
     SUPABASE_SERVICE_ROLE_KEY: str = ""
 
+    # Shared with the frontend's dashboard-login password (same Vercel
+    # project, same env var) - reused as a server-to-server secret so the
+    # destructive /automation/clear-sheet endpoint can require the frontend's
+    # Next.js proxy route to prove it's acting on behalf of a logged-in
+    # session, without ever exposing the password to the browser itself.
+    ACCESS_PASSWORD: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:
