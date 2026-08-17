@@ -160,7 +160,16 @@ def clear_sheet(
     if target not in ("receipt_payment", "deposit_withdrawal", "both"):
         raise HTTPException(status_code=400, detail=f"Unknown target: {target!r}")
 
-    results = automation_engine.clear_destination_data(target)
+    try:
+        results = automation_engine.clear_destination_data(target)
+    except Exception as exc:
+        # Surface the real failure as clean JSON - without this, an
+        # unhandled exception falls through to Starlette's debug-mode HTML
+        # error page (DEBUG defaults True), which the frontend can't parse,
+        # so a real error (e.g. a Sheets API rate limit) shows up as an
+        # opaque "status 500" with no way to tell what actually happened.
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
     return ClearSheetResponse(
         target=target,
         sheets_cleared=[ClearedSheet(**r) for r in results],

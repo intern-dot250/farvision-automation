@@ -86,6 +86,26 @@ def test_clear_sheet_deposit_withdrawal_target():
     mock_clear.assert_called_once_with("deposit_withdrawal")
 
 
+def test_clear_sheet_surfaces_real_error_as_json_instead_of_opaque_500():
+    # Previously an unhandled exception here fell through to Starlette's
+    # debug-mode HTML error page, which the frontend can't parse - it just
+    # showed "status 500" with no indication of what actually failed (e.g.
+    # a Google Sheets API rate limit). Must come back as clean JSON with
+    # the real exception message in `detail`.
+    with patch("app.api.v1.automation.get_settings", return_value=_FakeSettings()), patch(
+        "app.api.v1.automation.automation_engine.clear_destination_data",
+        side_effect=RuntimeError("Quota exceeded for quota metric 'Read requests'"),
+    ):
+        response = client.post(
+            "/api/v1/automation/clear-sheet?target=both",
+            headers={"X-Internal-Secret": "test-secret"},
+        )
+
+    assert response.status_code == 500
+    assert response.headers["content-type"].startswith("application/json")
+    assert "Quota exceeded" in response.json()["detail"]
+
+
 def test_clear_sheet_both_target():
     with patch("app.api.v1.automation.get_settings", return_value=_FakeSettings()), patch(
         "app.api.v1.automation.automation_engine.clear_destination_data",
