@@ -1,13 +1,21 @@
+import difflib
 import re
 from functools import lru_cache
 
 import pandas as pd
 
 from app.core.config import get_settings
+from app.core.logger import logger
 from app.services import sheets_client
 
 MASTER_WORKSHEET = "Master"
 _LOOKUP_COLUMNS = ("Payee Name", "Account Head")
+
+# Minimum difflib.SequenceMatcher ratio for find_party_fuzzy() to accept a
+# match - roughly a 1-2 character difference on a normal-length name (e.g.
+# "WALFARE" vs "WELFARE"). Tight enough that genuinely different names
+# ("S N LTD" vs "R N LTD") don't collide.
+_FUZZY_MIN_RATIO = 0.92
 
 # Master's Payee Name often has a short employee/vendor code or tag appended
 # after the plain name used in bank descriptions - e.g. "Ravi Vats(555)",
@@ -186,7 +194,9 @@ def find_party(payee_name: str | None, company: str | None = "DPL") -> dict | No
 
     Returns the first matching row as a dict, or None if no party in Master
     matches — which is how "Internal" transactions with no IFSC still get a
-    definitive non-match check against known parties.
+    definitive non-match check against known parties. Falls back to
+    find_party_fuzzy() (a narrow typo-only match) only when this exact/
+    canonical lookup finds nothing at all.
 
     `company` (see resolve_company()) restricts matches to that company's
     own rows when Master has a "Company" column - Master mixes two
@@ -224,6 +234,68 @@ def find_party(payee_name: str | None, company: str | None = "DPL") -> dict | No
         match = df[match_mask]
         if not match.empty:
             return match.iloc[0].to_dict()
+
+    return find_party_fuzzy(payee_name, company=company)
+
+
+def find_party_fuzzy(payee_name: str | None, company: str | None = "DPL") -> dict | None:
+    """Last-resort match for a payee name that's a near-miss typo of a real
+    Master entry - e.g. "Aravali Height Resident Walfare Association" vs
+    Master's "...WELFARE...". Only ever called after find_party()'s exact/
+    canonical matching has already found nothing - never overrides or
+    competes with an exact match.
+
+    Deliberately narrow, not a general fuzzy search: requires both a high
+    similarity ratio (difflib.SequenceMatcher, >= _FUZZY_MIN_RATIO) AND the
+    same word count (blocks a high ratio that's really just one name being a
+    truncated/extended version of a genuinely different one) AND that it's
+    the single best-scoring row with no other row tied at the same score -
+    if two Master rows are both plausible typo candidates, this refuses to
+    guess and returns None, the same "never guess silently" principle
+    account_head_resolver already follows for ambiguous Account Heads.
+    """
+    if not payee_name:
+        return None
+
+    df = _load_master_df()
+    key = _normalize(payee_name)
+    key_word_count = len(key.split())
+    if key_word_count == 0:
+        return None
+
+    company_mask = None
+    if company and "Company" in df.columns:
+        company_mask = df["Company"].astype(str).str.strip().str.upper() == company.strip().upper()
+
+    for column in _LOOKUP_COLUMNS:
+        normalized = _normalized_column(column)
+        if normalized is None:
+            continue
+
+        scored: list[tuple[float, int]] = []
+        for idx, value in normalized.items():
+            if company_mask is not None and not company_mask.loc[idx]:
+                continue
+            if not value or len(value.split()) != key_word_count:
+                continue
+            ratio = difflib.SequenceMatcher(None, key, value).ratio()
+            if ratio >= _FUZZY_MIN_RATIO:
+                scored.append((ratio, idx))
+
+        if not scored:
+            continue
+
+        best_ratio = max(ratio for ratio, _ in scored)
+        best_matches = [idx for ratio, idx in scored if ratio == best_ratio]
+        if len(best_matches) != 1:
+            return None  # ambiguous - two+ equally-close typo candidates, never guess
+
+        row = df.loc[best_matches[0]].to_dict()
+        logger.info(
+            f"[master_repository] fuzzy_match payee={payee_name!r} "
+            f"matched={row.get(column)!r} ratio={best_ratio:.3f}"
+        )
+        return row
 
     return None
 
@@ -269,7 +341,8 @@ def find_party_candidates(payee_name: str | None, company: str | None = "DPL") -
         if not match.empty:
             return match.to_dict("records")
 
-    return []
+    fuzzy = find_party_fuzzy(payee_name, company=company)
+    return [fuzzy] if fuzzy else []
 
 
 def _category_rows(account_head: str | None, parent_account_head: str | None) -> pd.DataFrame:

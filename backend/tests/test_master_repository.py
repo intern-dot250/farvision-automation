@@ -377,6 +377,132 @@ def test_find_party_candidates_scoped_by_company(monkeypatch):
     assert dpl_candidates[0]["Parent Account Head"] == "SUNDRY CREDITORS - CONTRACTORS"
 
 
+# --- find_party_fuzzy: narrow, last-resort typo fallback ---
+
+
+def test_find_party_fuzzy_matches_a_one_word_typo(monkeypatch):
+    # Reproduces the real production case: "Walfare" (bank narration typo)
+    # vs Master's correctly-spelled "Welfare".
+    df = pd.DataFrame.from_records(
+        [{
+            "Payee Name": "ARAVALI HEIGHT RESIDENT WELFARE ASSOCIATION",
+            "Account Head": "ARAVALI HEIGHT RESIDENT WELFARE ASSOCIATION",
+            "Parent Account Head": "SUNDRY CREDITORS - EXPENSES",
+        }]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    result = master_repository.find_party_fuzzy("Aravali Height Resident Walfare Association")
+
+    assert result is not None
+    assert result["Parent Account Head"] == "SUNDRY CREDITORS - EXPENSES"
+
+
+def test_find_party_fuzzy_refuses_when_two_candidates_tie(monkeypatch):
+    # Two Master rows are both plausible typo candidates for the same
+    # input, at the exact same similarity ratio - must never guess between
+    # them, falls through to None.
+    df = pd.DataFrame.from_records(
+        [
+            {"Payee Name": "ARAVALI HEIGHT RESIDENT WELFARE ASSOCIATION", "Account Head": "X", "Parent Account Head": "A"},
+            {"Payee Name": "ARAVALI HEIGHT RESIDENT WOLFARE ASSOCIATION", "Account Head": "Y", "Parent Account Head": "B"},
+        ]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    assert master_repository.find_party_fuzzy("ARAVALI HEIGHT RESIDENT WALFARE ASSOCIATION") is None
+
+
+def test_find_party_fuzzy_refuses_when_word_count_differs(monkeypatch):
+    # High raw similarity but a different word count (a name that's really
+    # a truncated/extended version of another) must not match.
+    df = pd.DataFrame.from_records(
+        [{"Payee Name": "ARAVALI HEIGHTS", "Account Head": "ARAVALI HEIGHTS", "Parent Account Head": "X"}]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    assert master_repository.find_party_fuzzy("ARAVALI HEIGHT RESIDENT WELFARE ASSOCIATION") is None
+
+
+def test_find_party_fuzzy_refuses_below_threshold(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [{"Payee Name": "S N LTD", "Account Head": "S N LTD", "Parent Account Head": "X"}]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    assert master_repository.find_party_fuzzy("R N LTD") is None
+
+
+def test_find_party_fuzzy_scoped_by_company(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [
+            {"Company": "AMB", "Payee Name": "ARAVALI HEIGHT RESIDENT WELFARE ASSOCIATION", "Account Head": "ARAVALI HEIGHT RESIDENT WELFARE ASSOCIATION", "Parent Account Head": "AMB VALUE"},
+        ]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    assert master_repository.find_party_fuzzy("Aravali Height Resident Walfare Association", company="DPL") is None
+    result = master_repository.find_party_fuzzy("Aravali Height Resident Walfare Association", company="AMB")
+    assert result["Parent Account Head"] == "AMB VALUE"
+
+
+def test_find_party_prefers_exact_match_over_fuzzy(monkeypatch):
+    # An exact match must always win - the fuzzy fallback is never even
+    # consulted when an exact/canonical match already exists.
+    df = pd.DataFrame.from_records(
+        [
+            {"Payee Name": "ARAVALI HEIGHT RESIDENT WALFARE ASSOCIATION", "Account Head": "X", "Parent Account Head": "EXACT MATCH"},
+            {"Payee Name": "ARAVALI HEIGHT RESIDENT WELFARE ASSOCIATION", "Account Head": "Y", "Parent Account Head": "FUZZY MATCH"},
+        ]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    result = master_repository.find_party("Aravali Height Resident Walfare Association")
+
+    assert result["Parent Account Head"] == "EXACT MATCH"
+
+
+def test_find_party_falls_back_to_fuzzy_when_no_exact_match(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [{
+            "Payee Name": "ARAVALI HEIGHT RESIDENT WELFARE ASSOCIATION",
+            "Account Head": "ARAVALI HEIGHT RESIDENT WELFARE ASSOCIATION",
+            "Parent Account Head": "SUNDRY CREDITORS - EXPENSES",
+        }]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    result = master_repository.find_party("Aravali Height Resident Walfare Association")
+
+    assert result is not None
+    assert result["Parent Account Head"] == "SUNDRY CREDITORS - EXPENSES"
+
+
+def test_find_party_candidates_falls_back_to_fuzzy_as_single_element_list(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [{
+            "Payee Name": "ARAVALI HEIGHT RESIDENT WELFARE ASSOCIATION",
+            "Account Head": "ARAVALI HEIGHT RESIDENT WELFARE ASSOCIATION",
+            "Parent Account Head": "SUNDRY CREDITORS - EXPENSES",
+        }]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    candidates = master_repository.find_party_candidates("Aravali Height Resident Walfare Association")
+
+    assert len(candidates) == 1
+    assert candidates[0]["Parent Account Head"] == "SUNDRY CREDITORS - EXPENSES"
+
+
+def test_find_party_fuzzy_no_match_for_unrelated_name(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [{"Payee Name": "TOTALLY DIFFERENT COMPANY", "Account Head": "TOTALLY DIFFERENT COMPANY", "Parent Account Head": "X"}]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    assert master_repository.find_party_fuzzy("Aravali Height Resident Walfare Association") is None
+
+
 def test_find_deduction_for_head_returns_none_when_no_category_match(monkeypatch):
     df = pd.DataFrame.from_records(
         [
