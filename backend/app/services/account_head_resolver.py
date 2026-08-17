@@ -5,8 +5,6 @@ from dataclasses import dataclass
 from app.core.logger import logger
 from app.services import master_repository
 
-_DROPDOWN_FIELDS = ("Account Head", "Parent Account Head")
-
 _STOPWORDS = {
     "the", "a", "an", "for", "to", "of", "and", "or", "in", "on", "at",
     "from", "by", "with", "payment", "purpose", "ref", "narration", "type",
@@ -53,24 +51,58 @@ def dedupe_candidates(rows: list[dict]) -> list[dict]:
 
 
 def dropdown_targets(candidates: list[dict]) -> dict[str, list[str]]:
-    """For "Account Head" and "Parent Account Head" independently, the
-    distinct non-blank values among `candidates` - only returned for a field
-    if there are 2+ of them, so a dropdown only ever appears on the
-    column(s) that genuinely need a decision (real Master data shows this is
-    usually just Parent Account Head, occasionally both, never hardcoded to
-    one)."""
-    targets: dict[str, list[str]] = {}
-    for field in _DROPDOWN_FIELDS:
+    """"Account Head" is the only field ever offered as a dropdown for an
+    ambiguous beneficiary - it's the true unique key in Master, and
+    elsewhere in this codebase Parent Account Head is always *derived from*
+    whichever Account Head matched (see
+    automation_engine._build_receipt_payment_rows), never picked
+    independently. An earlier version of this function also offered Parent
+    Account Head as its own independent dropdown, which let someone pick a
+    Parent Account Head value that didn't correspond to whatever Account
+    Head text was still sitting in the cell - a combination that may not
+    match any real Master row.
+
+    Distinct real Account Head values become the options. When two or more
+    candidates share literally the same Account Head text but differ in
+    Parent Account Head (the common real-data shape - most of the 42
+    duplicate-beneficiary cases found in Master), each option is
+    disambiguated by appending that row's own Parent Account Head in
+    parentheses, e.g. "Rajesh Kumar.. (SALARY PAYABLE)" - so every option
+    still uniquely identifies one real Master row, and Parent Account Head
+    is never exposed as an independently-pickable field.
+
+    Returns {} if there's only one genuinely distinguishable option (nothing
+    left to pick between).
+    """
+    if len(candidates) < 2:
+        return {}
+
+    account_heads = [str(c.get("Account Head", "")).strip() for c in candidates]
+    if len(set(h for h in account_heads if h)) >= 2:
         values: list[str] = []
         seen: set[str] = set()
-        for candidate in candidates:
-            value = str(candidate.get(field, "")).strip()
-            if value and value not in seen:
-                seen.add(value)
-                values.append(value)
-        if len(values) >= 2:
-            targets[field] = values
-    return targets
+        for head in account_heads:
+            if head and head not in seen:
+                seen.add(head)
+                values.append(head)
+        return {"Account Head": values} if len(values) >= 2 else {}
+
+    # Account Head text alone doesn't distinguish the candidates - fall back
+    # to a synthesized "Account Head (Parent Account Head)" label per row, so
+    # the dropdown still lets someone pick the correct real row without ever
+    # exposing Parent Account Head as its own independent choice.
+    values = []
+    seen = set()
+    for candidate in candidates:
+        head = str(candidate.get("Account Head", "")).strip()
+        parent = str(candidate.get("Parent Account Head", "")).strip()
+        if not head or not parent:
+            continue
+        label = f"{head} ({parent})"
+        if label not in seen:
+            seen.add(label)
+            values.append(label)
+    return {"Account Head": values} if len(values) >= 2 else {}
 
 
 def _keywords(text: str) -> set[str]:

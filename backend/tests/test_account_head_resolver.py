@@ -21,26 +21,60 @@ def test_dedupe_candidates_collapses_identical_pairs():
 
 
 # --- dropdown_targets ---
+# Account Head is the only field ever offered as a dropdown - Parent
+# Account Head is never independently pickable, since the two are a fixed
+# pair in Master and letting someone choose Parent Account Head on its own
+# can produce a combination that doesn't correspond to any real Master row.
 
 
-def test_dropdown_targets_only_flags_fields_with_2plus_distinct_values():
+def test_dropdown_targets_synthesizes_combined_labels_when_account_head_text_is_identical():
+    # Real-data shape: same Account Head text, different Parent Account Head
+    # - each option must still uniquely identify the real underlying row.
     candidates = [
         _row("RAJESH KUMAR", "SUNDRY CREDITORS - OTHER"),
         _row("RAJESH KUMAR", "GENERAL CATEGORY-FLATS"),
     ]
     targets = account_head_resolver.dropdown_targets(candidates)
-    assert "Parent Account Head" in targets
-    assert set(targets["Parent Account Head"]) == {"SUNDRY CREDITORS - OTHER", "GENERAL CATEGORY-FLATS"}
-    assert "Account Head" not in targets  # identical across candidates
+    assert set(targets.keys()) == {"Account Head"}
+    assert set(targets["Account Head"]) == {
+        "RAJESH KUMAR (SUNDRY CREDITORS - OTHER)",
+        "RAJESH KUMAR (GENERAL CATEGORY-FLATS)",
+    }
 
 
-def test_dropdown_targets_flags_both_fields_when_both_differ():
+def test_dropdown_targets_uses_real_account_head_values_when_they_differ():
     candidates = [
         _row("RAJESH KUMAR", "SUNDRY CREDITORS - OTHER"),
         _row("RAJESH K. SHARMA", "GENERAL CATEGORY-FLATS"),
     ]
     targets = account_head_resolver.dropdown_targets(candidates)
-    assert set(targets.keys()) == {"Account Head", "Parent Account Head"}
+    assert set(targets.keys()) == {"Account Head"}
+    assert set(targets["Account Head"]) == {"RAJESH KUMAR", "RAJESH K. SHARMA"}
+
+
+def test_dropdown_targets_never_returns_parent_account_head():
+    candidates = [
+        _row("RAJESH KUMAR", "SUNDRY CREDITORS - OTHER"),
+        _row("RAJESH KUMAR", "GENERAL CATEGORY-FLATS"),
+        _row("RAJESH K SHARMA", "ADVANCE FROM CUSTOMER (INVESTOR)"),
+    ]
+    targets = account_head_resolver.dropdown_targets(candidates)
+    assert "Parent Account Head" not in targets
+
+
+def test_dropdown_targets_empty_for_single_candidate():
+    assert account_head_resolver.dropdown_targets([_row("MUKESH KUMAR", "SUNDRY CREDITORS - CONTRACTORS")]) == {}
+
+
+def test_dropdown_targets_empty_when_nothing_distinguishes_candidates():
+    # Both Account Head and Parent Account Head identical - dedupe_candidates
+    # would already have collapsed this in practice, but dropdown_targets
+    # itself must also degrade safely to "nothing to pick".
+    candidates = [
+        _row("RAJESH KUMAR", "SUNDRY CREDITORS - OTHER"),
+        _row("RAJESH KUMAR", "SUNDRY CREDITORS - OTHER"),
+    ]
+    assert account_head_resolver.dropdown_targets(candidates) == {}
 
 
 # --- resolve(): the 7 required scenarios ---
@@ -64,7 +98,9 @@ def test_2_two_candidates_no_signal_is_ambiguous_not_first_row():
     assert result.reason == "no_confident_signal"
     assert len(result.candidates) == 2
     targets = account_head_resolver.dropdown_targets(result.candidates)
-    assert targets["Parent Account Head"] == ["SUNDRY CREDITORS - OTHER", "GENERAL CATEGORY-FLATS"]
+    assert targets["Account Head"] == [
+        "RAJESH KUMAR (SUNDRY CREDITORS - OTHER)", "RAJESH KUMAR (GENERAL CATEGORY-FLATS)",
+    ]
 
 
 def test_3_narration_context_clearly_favors_one_candidate():

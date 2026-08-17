@@ -1608,13 +1608,39 @@ def test_attach_ambiguous_dropdowns_calls_add_dropdown_for_every_ambiguous_trans
         "app.services.automation_engine.sheets_client.find_row_number", return_value=5
     ), patch(
         "app.services.automation_engine.sheets_client.add_dropdown_validation"
-    ) as mock_add:
+    ) as mock_add, patch(
+        "app.services.automation_engine.sheets_client.add_cell_note"
+    ):
         _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")
 
+    # Account Head is the only field ever offered as a dropdown - synthesized
+    # combined labels since these candidates share identical raw Account
+    # Head text (see account_head_resolver.dropdown_targets).
     mock_add.assert_called_once_with(
-        "rp-sheet-id", "LedgerDetails", 5, "Parent Account Head",
-        ["SUNDRY CREDITORS - OTHER", "GENERAL CATEGORY-FLATS"],
+        "rp-sheet-id", "LedgerDetails", 5, "Account Head",
+        ["RAJESH KUMAR (SUNDRY CREDITORS - OTHER)", "RAJESH KUMAR (GENERAL CATEGORY-FLATS)"],
     )
+
+
+def test_attach_ambiguous_dropdowns_also_attaches_a_verification_note():
+    # Parent Account Head can't be auto-updated when someone picks from the
+    # Account Head dropdown - a cell note must explain that it needs manual
+    # verification.
+    txn = _ambiguous_txn(_CANDIDATES)
+
+    with patch(
+        "app.services.automation_engine.sheets_client.find_row_number", return_value=5
+    ), patch(
+        "app.services.automation_engine.sheets_client.add_dropdown_validation"
+    ), patch(
+        "app.services.automation_engine.sheets_client.add_cell_note"
+    ) as mock_note:
+        _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")
+
+    mock_note.assert_called_once()
+    args = mock_note.call_args.args
+    assert args[:4] == ("rp-sheet-id", "LedgerDetails", 5, "Account Head")
+    assert "Parent Account Head" in args[4]
 
 
 def test_attach_ambiguous_dropdowns_skips_non_ambiguous_transactions():
@@ -1625,11 +1651,14 @@ def test_attach_ambiguous_dropdowns_skips_non_ambiguous_transactions():
         "app.services.automation_engine.sheets_client.find_row_number"
     ) as mock_find, patch(
         "app.services.automation_engine.sheets_client.add_dropdown_validation"
-    ) as mock_add:
+    ) as mock_add, patch(
+        "app.services.automation_engine.sheets_client.add_cell_note"
+    ) as mock_note:
         _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")
 
     mock_find.assert_not_called()
     mock_add.assert_not_called()
+    mock_note.assert_not_called()
 
 
 def test_attach_ambiguous_dropdowns_retries_once_then_logs_error_on_final_failure():
@@ -1641,6 +1670,8 @@ def test_attach_ambiguous_dropdowns_retries_once_then_logs_error_on_final_failur
         "app.services.automation_engine.sheets_client.add_dropdown_validation",
         side_effect=RuntimeError("Sheets API hiccup"),
     ) as mock_add, patch(
+        "app.services.automation_engine.sheets_client.add_cell_note"
+    ), patch(
         "app.services.automation_engine.ledger_repository.log_audit"
     ) as mock_log:
         _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")
@@ -1660,12 +1691,34 @@ def test_attach_ambiguous_dropdowns_recovers_on_retry():
         "app.services.automation_engine.sheets_client.add_dropdown_validation",
         side_effect=[RuntimeError("transient"), None],
     ) as mock_add, patch(
+        "app.services.automation_engine.sheets_client.add_cell_note"
+    ), patch(
         "app.services.automation_engine.ledger_repository.log_audit"
     ) as mock_log:
         _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")
 
     assert mock_add.call_count == 2
     mock_log.assert_not_called()
+
+
+def test_attach_ambiguous_dropdowns_note_retries_once_then_logs_error_on_final_failure():
+    txn = _ambiguous_txn(_CANDIDATES)
+
+    with patch(
+        "app.services.automation_engine.sheets_client.find_row_number", return_value=5
+    ), patch(
+        "app.services.automation_engine.sheets_client.add_dropdown_validation"
+    ), patch(
+        "app.services.automation_engine.sheets_client.add_cell_note",
+        side_effect=RuntimeError("Sheets API hiccup"),
+    ) as mock_note, patch(
+        "app.services.automation_engine.ledger_repository.log_audit"
+    ) as mock_log:
+        _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")
+
+    assert mock_note.call_count == 2
+    mock_log.assert_called_once()
+    assert mock_log.call_args.args[1] == "error"
 
 
 def test_attach_ambiguous_dropdowns_failure_never_raises():
@@ -1677,6 +1730,9 @@ def test_attach_ambiguous_dropdowns_failure_never_raises():
         "app.services.automation_engine.sheets_client.find_row_number", return_value=5
     ), patch(
         "app.services.automation_engine.sheets_client.add_dropdown_validation",
+        side_effect=RuntimeError("permanent failure"),
+    ), patch(
+        "app.services.automation_engine.sheets_client.add_cell_note",
         side_effect=RuntimeError("permanent failure"),
     ), patch(
         "app.services.automation_engine.ledger_repository.log_audit"
@@ -1691,10 +1747,13 @@ def test_attach_ambiguous_dropdowns_skips_when_row_not_found_and_logs_error():
         "app.services.automation_engine.sheets_client.find_row_number", return_value=None
     ), patch(
         "app.services.automation_engine.sheets_client.add_dropdown_validation"
-    ) as mock_add:
+    ) as mock_add, patch(
+        "app.services.automation_engine.sheets_client.add_cell_note"
+    ) as mock_note:
         _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")
 
     mock_add.assert_not_called()
+    mock_note.assert_not_called()
 
 
 def test_attach_ambiguous_dropdowns_skips_deposit_withdrawal_destination():

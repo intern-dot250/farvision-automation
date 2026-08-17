@@ -284,11 +284,10 @@ def add_dropdown_validation(
     sheet_id: str, worksheet_name: str, row_number: int, column: str, values: list[str]
 ) -> None:
     """Attach a native Sheets dropdown (restricted to `values`) to one cell
-    of an already-written row - used for a Ledger Details Account
-    Head/Parent Account Head cell whose beneficiary matched more than one
-    genuine Master option, so it can be resolved with two clicks directly in
-    the sheet instead of a separate review step. No-op if `column` isn't a
-    real header on this worksheet.
+    of an already-written row - used for a Ledger Details Account Head cell
+    whose beneficiary matched more than one genuine Master option, so it can
+    be resolved with two clicks directly in the sheet instead of a separate
+    review step. No-op if `column` isn't a real header on this worksheet.
     """
     worksheet = get_worksheet(sheet_id, worksheet_name)
     header = worksheet.row_values(1)
@@ -301,6 +300,22 @@ def add_dropdown_validation(
         values,
         showCustomUi=True,
     )
+
+
+def add_cell_note(sheet_id: str, worksheet_name: str, row_number: int, column: str, note_text: str) -> None:
+    """Attach a plain cell note (the small red-corner comment, not a
+    validation dropdown) to one cell of an already-written row - used
+    alongside add_dropdown_validation to explain that a second column needs
+    manual verification, since native Sheets validation can't auto-update
+    one cell based on another cell's selection. No-op if `column` isn't a
+    real header on this worksheet.
+    """
+    worksheet = get_worksheet(sheet_id, worksheet_name)
+    header = worksheet.row_values(1)
+    if column not in header:
+        return
+    letter = _column_letter(header.index(column) + 1)
+    worksheet.insert_note(f"{letter}{row_number}", note_text)
 
 
 # Never cleared, regardless of which tab-name conventions a spreadsheet uses -

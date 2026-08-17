@@ -762,12 +762,24 @@ def _write_transactions(transactions: list[TransactionRowSet], settings, run_id:
     # no separate ledger to update here.
 
 
+_AMBIGUOUS_ACCOUNT_HEAD_NOTE = (
+    "Multiple Master entries exist for this beneficiary. After picking the "
+    "correct Account Head from the dropdown, verify Parent Account Head "
+    "still matches it - it was not updated automatically."
+)
+
+
 def _attach_ambiguous_dropdowns(transactions: list[TransactionRowSet], settings, run_id: str) -> None:
-    """After a real (non-dry-run) write, attach an in-sheet dropdown to every
-    Account Head/Parent Account Head cell whose beneficiary was ambiguous
+    """After a real (non-dry-run) write, attach an in-sheet dropdown to the
+    Account Head cell of every transaction whose beneficiary was ambiguous
     (classification.account_head_candidates set) - restricted to just that
     beneficiary's real candidate values, so it's resolved with two clicks
-    directly in the sheet.
+    directly in the sheet. Account Head is the only field ever offered as a
+    dropdown - see account_head_resolver.dropdown_targets() for why Parent
+    Account Head is deliberately never independently pickable. A cell note
+    is attached alongside it, since native Sheets validation can't
+    auto-update Parent Account Head to match whichever Account Head gets
+    picked.
 
     This step is compulsory for every ambiguous transaction, not
     best-effort: a transient failure (e.g. a Sheets API hiccup) is retried
@@ -817,6 +829,24 @@ def _attach_ambiguous_dropdowns(transactions: list[TransactionRowSet], settings,
                         run_id, "error", f"Failed to attach Account Head dropdown for SL#{txn.sl_no}",
                         {"reference": txn.reference, "column": column, "error": str(exc)},
                     )
+
+        for attempt in (1, 2):
+            try:
+                sheets_client.add_cell_note(
+                    settings.RECEIPT_PAYMENT_SHEET_ID, "LedgerDetails", row_number, "Account Head",
+                    _AMBIGUOUS_ACCOUNT_HEAD_NOTE,
+                )
+                break
+            except Exception as exc:
+                if attempt < 2:
+                    continue
+                logger.error(
+                    f"[{run_id}] Failed to attach Account Head note for SL#{txn.sl_no}: {exc}"
+                )
+                ledger_repository.log_audit(
+                    run_id, "error", f"Failed to attach Account Head note for SL#{txn.sl_no}",
+                    {"reference": txn.reference, "error": str(exc)},
+                )
 
 
 def _distinct_sheet_names(bank_rows: list[dict]) -> list[str]:
