@@ -63,6 +63,7 @@ def _fake_stream(dry_run, rows):
             needs_review=0,
             duplicates_skipped=0,
             skipped_internal_credit=0,
+            skipped_collection=0,
             transactions=[],
         ),
     }

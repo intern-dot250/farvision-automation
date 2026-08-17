@@ -28,6 +28,7 @@ def _build_run_response(result: automation_engine.RunResult) -> RunResponse:
         needs_review=result.needs_review,
         duplicates_skipped=result.duplicates_skipped,
         skipped_internal_credit=result.skipped_internal_credit,
+        skipped_collection=result.skipped_collection,
         transactions=[
             TransactionSummary(
                 sl_no=txn.sl_no,

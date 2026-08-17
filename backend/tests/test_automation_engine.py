@@ -465,11 +465,10 @@ def test_other_head_with_blank_deduction_falls_back_to_paired_deduction_and_desc
     assert tax_rows[0]["Description"] == "TDS ON COMMISSION"
 
 
-def test_collection_head_with_master_match_and_blank_description_routes_to_receipt_payment():
-    # Regression for the bug where a Master match with blank Description
-    # blocked ANY head in Review, not just Contractor/Vendor - Collection
-    # (and any other non-Contractor/Vendor head) must route straight to
-    # Receipt/Payment even when Master has no Description for the payee.
+def test_collection_head_with_master_match_and_blank_description_is_skipped():
+    # Collection is always skipped entirely, regardless of whether Master
+    # has a match or a Description for the payee - never routed to Review,
+    # never written anywhere.
     bank_rows = [
         {
             "SL#": "165",
@@ -496,7 +495,7 @@ def test_collection_head_with_master_match_and_blank_description_routes_to_recei
     assert len(transactions) == 1
     txn = transactions[0]
     assert txn.classification.head == "Collection"
-    assert txn.destination == "receipt_payment"
+    assert txn.destination == "skipped_collection"
     assert txn.review_reason is None
 
 
@@ -995,12 +994,12 @@ def test_contractor_head_with_blank_master_description_still_routes_to_receipt_p
     assert txn.review_reason is None
 
 
-def test_collection_head_routes_to_receipt_payment_not_review():
-    # Collection routes to Receipt/Payment (business rule) and must not get
-    # flagged for review. "NEFT Cr-{IFSC}-{Payee}-..." narrations don't
-    # match the usual "{channel}-{mode}-{utr}-{payee}-{ifsc}-{head}-{bank}"
-    # token shape, but description_parser has a dedicated credit-style
-    # branch for it, so the payee name still parses out correctly.
+def test_collection_head_is_skipped_not_routed_to_review():
+    # Collection is always skipped (business rule) - never flagged for
+    # review either. "NEFT Cr-{IFSC}-{Payee}-..." narrations don't match
+    # the usual "{channel}-{mode}-{utr}-{payee}-{ifsc}-{head}-{bank}" token
+    # shape, but description_parser has a dedicated credit-style branch for
+    # it, so the payee name still parses out correctly regardless.
     bank_rows = [
         {
             "SL#": "168",
@@ -1028,7 +1027,7 @@ def test_collection_head_routes_to_receipt_payment_not_review():
     txn = transactions[0]
     assert txn.classification.head == "Collection"
     assert txn.classification.needs_review is False
-    assert txn.destination == "receipt_payment"
+    assert txn.destination == "skipped_collection"
     assert txn.classification.payee_name == "ROHITAS KUMAR"
 
 
@@ -1064,6 +1063,57 @@ def test_internal_credit_leg_is_skipped_not_routed_to_deposit_withdrawal():
     txn = transactions[0]
     assert txn.classification.is_internal is True
     assert txn.destination == "skipped_internal_credit"
+
+
+def test_collection_head_transaction_is_skipped_entirely():
+    # Collection-headed transactions must never be written to any sheet, and
+    # never routed to review either - dropped unconditionally.
+    bank_rows = [
+        {
+            "SL#": "1",
+            "REFERENCE": "REF-COLLECTION-1",
+            "DESCRIPTION": "Some collection narration",
+            "TXN DATE": "22-Jul-2026",
+            "DEBITS": "",
+            "CREDITS": "50000",
+            "BUSINESS UNIT": "Casa Romana",
+            "HEAD": "Collection",
+        }
+    ]
+
+    with patch(
+        "app.services.automation_engine.sheets_client.get_column_values",
+        return_value=set(),
+    ), patch(
+        "app.services.automation_engine.classifier.master_repository.find_party",
+        return_value=None,
+    ):
+        transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
+
+    assert len(transactions) == 1
+    txn = transactions[0]
+    assert txn.classification.head == "Collection"
+    assert txn.destination == "skipped_collection"
+
+
+def test_assign_rows_skips_collection_without_building_rows(monkeypatch):
+    # Same convention as skipped_internal_credit - _assign_rows only builds
+    # rows for "receipt_payment"/"deposit_withdrawal" destinations, so
+    # "skipped_collection" must fall through untouched.
+    txn = _receipt_payment_txn("Collection", {})
+    txn.destination = "skipped_collection"
+
+    monkeypatch.setattr(
+        "app.services.automation_engine.ref_code.get_next_ref_code", lambda *a, **k: 1
+    )
+    monkeypatch.setattr(
+        "app.services.automation_engine.override_rules_repository.list_active", lambda: []
+    )
+
+    _assign_rows([txn], _FakeSettings(), run_id="test-run")
+
+    assert txn.rows == {}
+    assert txn.destination == "skipped_collection"
 
 
 def test_internal_debit_leg_still_routes_to_deposit_withdrawal():

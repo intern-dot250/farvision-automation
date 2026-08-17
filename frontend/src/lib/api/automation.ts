@@ -24,6 +24,7 @@ export type RunResponse = {
   needs_review: number;
   duplicates_skipped: number;
   skipped_internal_credit: number;
+  skipped_collection: number;
   transactions: TransactionSummary[];
 };
 

@@ -11,6 +11,7 @@ export type RunSummary = {
   needs_review: number | null;
   duplicates_skipped: number | null;
   skipped_internal_credit: number | null;
+  skipped_collection: number | null;
 };
 
 export type LogEntry = {

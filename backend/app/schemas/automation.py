@@ -25,6 +25,7 @@ class RunResponse(BaseModel):
     needs_review: int
     duplicates_skipped: int
     skipped_internal_credit: int
+    skipped_collection: int
     transactions: list[TransactionSummary]
 
 

@@ -14,6 +14,7 @@ class RunSummary(BaseModel):
     needs_review: int | None = None
     duplicates_skipped: int | None = None
     skipped_internal_credit: int | None = None
+    skipped_collection: int | None = None
 
 
 class LogEntry(BaseModel):
