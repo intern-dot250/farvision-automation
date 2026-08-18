@@ -2023,6 +2023,31 @@ def test_attach_ambiguous_dropdowns_skips_when_row_not_found_and_logs_error():
     mock_note.assert_not_called()
 
 
+def test_attach_ambiguous_dropdowns_survives_find_row_number_failure():
+    # A transient Sheets API failure while locating the written row (e.g. a
+    # quota hiccup) must not raise out of this function - it's a cosmetic,
+    # post-write step, and the docstring's "never blocking the write"
+    # promise must hold even for this call, not just the retried ones below.
+    txn = _ambiguous_txn(_CANDIDATES)
+
+    with patch(
+        "app.services.automation_engine.sheets_client.find_row_number",
+        side_effect=RuntimeError("quota exceeded"),
+    ), patch(
+        "app.services.automation_engine.sheets_client.add_dropdown_validation"
+    ) as mock_add, patch(
+        "app.services.automation_engine.sheets_client.add_cell_note"
+    ) as mock_note, patch(
+        "app.services.automation_engine.ledger_repository.log_audit"
+    ) as mock_log:
+        _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")  # must not raise
+
+    mock_add.assert_not_called()
+    mock_note.assert_not_called()
+    mock_log.assert_called_once()
+    assert mock_log.call_args.args[1] == "error"
+
+
 def test_attach_ambiguous_dropdowns_skips_deposit_withdrawal_destination():
     # Deposit/Withdrawal's LedgerDetails Account Head is the counterparty
     # bank name, not a beneficiary head - never eligible for this dropdown.
@@ -2263,6 +2288,54 @@ def test_process_rows_builds_and_threads_history_index():
 
 
 # --- Master cache freshness ---
+
+
+def test_run_automation_stream_survives_attach_ambiguous_dropdowns_failure():
+    # A cosmetic post-write step failing (e.g. a Sheets API quota hiccup)
+    # must never prevent the stream from yielding its final result - the
+    # real data write has already succeeded by the time this runs.
+    from app.services import automation_engine as engine_module
+
+    bank_rows = [
+        {
+            "SL#": "1",
+            "REFERENCE": "REF-STREAM-1",
+            "DESCRIPTION": "YIB-NEFT-REFSTREAM1-Some Vendor-SBIN0007204-Vendor-STATE BANK OF INDIA",
+            "TXN DATE": "22-Jul-2026",
+            "DEBITS": "1000",
+            "CREDITS": "",
+            "BUSINESS UNIT": "Casa Romana",
+            "source_sheet": "YES AH IDW 2457",
+        }
+    ]
+
+    with patch(
+        "app.services.automation_engine.sheets_client.get_column_values", return_value=set()
+    ), patch(
+        "app.services.automation_engine.classifier.master_repository.find_party_candidates",
+        return_value=[],
+    ), patch(
+        "app.services.automation_engine.master_repository.clear_cache"
+    ), patch(
+        "app.services.automation_engine.ref_code.get_next_ref_code", return_value=1
+    ), patch(
+        "app.services.automation_engine.override_rules_repository.list_active", return_value=[]
+    ), patch(
+        "app.services.automation_engine.sheets_client.append_records"
+    ), patch(
+        "app.services.automation_engine.sheets_client.count_data_rows", return_value=0
+    ), patch(
+        "app.services.automation_engine.master_repository.list_tds_descriptions", return_value=[]
+    ), patch(
+        "app.services.automation_engine._attach_ambiguous_dropdowns",
+        side_effect=RuntimeError("quota exceeded"),
+    ), patch(
+        "app.services.automation_engine.ledger_repository.log_audit"
+    ) as mock_log:
+        events = list(engine_module.run_automation_stream(dry_run=False, rows=bank_rows))  # must not raise
+
+    assert events[-1]["type"] == "result"
+    assert any(call.args[1] == "error" for call in mock_log.call_args_list)
 
 
 def test_run_automation_stream_clears_master_cache_before_processing():

@@ -836,9 +836,20 @@ def _write_transactions(transactions: list[TransactionRowSet], settings, run_id:
     # no separate ledger to update here.
 
     if import_tax_info_start_row is not None:
-        _attach_tax_info_description_dropdowns(
-            rp_batches["ImportTaxInfo"], import_tax_info_start_row, settings, run_id
-        )
+        # A post-write, cosmetic step - the real write above has already
+        # succeeded by this point, so nothing here may ever prevent the run
+        # from completing, regardless of what fails inside it (present or
+        # future). Same structural guarantee as the _attach_ambiguous_
+        # dropdowns call site in run_automation_stream().
+        try:
+            _attach_tax_info_description_dropdowns(
+                rp_batches["ImportTaxInfo"], import_tax_info_start_row, settings, run_id
+            )
+        except Exception as exc:
+            logger.error(f"[{run_id}] Attaching ImportTaxInfo Description dropdowns failed: {exc}")
+            ledger_repository.log_audit(
+                run_id, "error", "Attaching ImportTaxInfo Description dropdowns failed", {"error": str(exc)}
+            )
 
 
 _AMBIGUOUS_ACCOUNT_HEAD_NOTE = (
@@ -901,9 +912,20 @@ def _attach_ambiguous_dropdowns(transactions: list[TransactionRowSet], settings,
         if link_ref_code is None:
             continue
 
-        row_number = sheets_client.find_row_number(
-            settings.RECEIPT_PAYMENT_SHEET_ID, "LedgerDetails", "Link Ref Code", link_ref_code
-        )
+        try:
+            row_number = sheets_client.find_row_number(
+                settings.RECEIPT_PAYMENT_SHEET_ID, "LedgerDetails", "Link Ref Code", link_ref_code
+            )
+        except Exception as exc:
+            logger.error(
+                f"[{run_id}] Failed to locate written LedgerDetails row for SL#{txn.sl_no} "
+                f"(Link Ref Code={link_ref_code}) - dropdown not attached: {exc}"
+            )
+            ledger_repository.log_audit(
+                run_id, "error", f"Failed to locate written LedgerDetails row for SL#{txn.sl_no}",
+                {"reference": txn.reference, "error": str(exc)},
+            )
+            continue
         if row_number is None:
             logger.error(
                 f"[{run_id}] Could not locate written LedgerDetails row for SL#{txn.sl_no} "
@@ -1092,7 +1114,19 @@ def run_automation_stream(dry_run: bool = True, rows: list[dict] | None = None):
     if not dry_run:
         yield {"type": "progress", "stage": "writing", "processed": total, "total": total}
         _write_transactions(transactions, settings, run_id)
-        _attach_ambiguous_dropdowns(transactions, settings, run_id)
+        # A post-write, cosmetic step - the real write above has already
+        # succeeded by this point. Nothing inside this call (now or in any
+        # future change to it) may ever prevent the run from completing and
+        # yielding its final result - this is the structural backstop for
+        # that guarantee, on top of _attach_ambiguous_dropdowns' own
+        # per-transaction retry/logging.
+        try:
+            _attach_ambiguous_dropdowns(transactions, settings, run_id)
+        except Exception as exc:
+            logger.error(f"[{run_id}] Attaching ambiguous Account Head dropdowns failed: {exc}")
+            ledger_repository.log_audit(
+                run_id, "error", "Attaching ambiguous Account Head dropdowns failed", {"error": str(exc)}
+            )
 
     result = RunResult(
         run_id=run_id,
