@@ -476,6 +476,25 @@ def _process_rows_stream(bank_rows: list[dict], run_id: str, settings):
     )
     existing_narration_digits = {master_repository._digits_only(n) for n in rp_narrations | dw_narrations}
 
+    # Fallback duplicate key for a source bank statement with no reference
+    # number at all (e.g. "BOM 905", whose own REFERENCE column is always
+    # "N/A") - reference_digits is then always empty, so the check above can
+    # never fire and the same file would silently re-import every time.
+    # LedgerDetails already carries both Narration and Debit/Credit Amount on
+    # the same row for both destinations, so this needs no new tab/column.
+    def _no_ref_keys(sheet_id: str, worksheet_name: str) -> set[tuple[str, str]]:
+        keys = set()
+        for narration, debit_amount, credit_amount in sheets_client.get_columns(
+            sheet_id, worksheet_name, ["Narration", "Debit Amount", "Credit Amount"]
+        ):
+            amount = master_repository._digits_only(debit_amount or credit_amount)
+            if narration.strip() and amount:
+                keys.add((narration.strip(), amount))
+        return keys
+
+    rp_no_ref_keys = _no_ref_keys(settings.RECEIPT_PAYMENT_SHEET_ID, "LedgerDetails")
+    dw_no_ref_keys = _no_ref_keys(settings.DEPOSIT_WITHDRAWAL_SHEET_ID, "LedgerDetails")
+
     # {normalized payee: Counter((Account Head, Parent Account Head))} built
     # once per run from every head already written for a payee in
     # ReceiptPayment's LedgerDetails - lets account_head_resolver.resolve()
@@ -535,20 +554,29 @@ def _process_rows_stream(bank_rows: list[dict], run_id: str, settings):
             )
 
             reference_digits = master_repository._digits_only(reference)
-            is_duplicate = len(reference_digits) >= 4 and any(
-                reference_digits in existing for existing in existing_narration_digits
-            )
+            no_ref_key = (narration.strip(), master_repository._digits_only(str(int(debit or credit))))
+            if len(reference_digits) >= 4:
+                is_duplicate = any(reference_digits in existing for existing in existing_narration_digits)
+            else:
+                # No usable reference number in this source statement (e.g.
+                # "BOM 905") - the check above can never fire, so fall back to
+                # matching on (Narration, Amount) instead of always reporting
+                # "not a duplicate".
+                is_duplicate = no_ref_key in rp_no_ref_keys or no_ref_key in dw_no_ref_keys
 
             if is_duplicate:
                 logger.info(f"[{run_id}] Skipping duplicate SL#{sl_no} (reference={reference})")
                 ledger_repository.log_audit(
                     run_id, "info", f"Skipped duplicate SL#{sl_no}", {"reference": reference}
                 )
-                original_dest = (
-                    "receipt_payment"
-                    if any(reference_digits in master_repository._digits_only(n) for n in rp_narrations)
-                    else "deposit_withdrawal"
-                )
+                if len(reference_digits) >= 4:
+                    original_dest = (
+                        "receipt_payment"
+                        if any(reference_digits in master_repository._digits_only(n) for n in rp_narrations)
+                        else "deposit_withdrawal"
+                    )
+                else:
+                    original_dest = "receipt_payment" if no_ref_key in rp_no_ref_keys else "deposit_withdrawal"
                 transactions.append(
                     TransactionRowSet(
                         sl_no=sl_no,

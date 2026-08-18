@@ -614,6 +614,160 @@ def test_non_duplicate_transaction_when_reference_absent_from_both_sheets():
     assert transactions[0].source_sheet == "YES AH IDW 2457"
 
 
+def test_no_reference_duplicate_is_detected_via_narration_and_amount():
+    # "BOM 905"-style statement: REFERENCE is always "N/A", so the primary
+    # reference-digit check can never fire - the (Narration, Amount)
+    # fallback must catch this re-upload instead.
+    narration = "Payment Disbursement (Purpose: Bank Charges) | To: LF CHG CA AC | Ref: N/A | BU: HO | Head: Bank Charges"
+    bank_rows = [
+        {
+            "SL#": "1",
+            "REFERENCE": "N/A",
+            "DESCRIPTION": narration,
+            "NARRATION": narration,
+            "TXN DATE": "08-Apr-2026",
+            "DEBITS": "5000",
+            "CREDITS": "",
+            "BUSINESS UNIT": "HO",
+            "source_sheet": "BOM 905",
+        }
+    ]
+
+    def fake_get_columns(sheet_id, worksheet_name, columns):
+        if worksheet_name == "LedgerDetails" and columns == ["Narration", "Debit Amount", "Credit Amount"]:
+            return [(narration, "5,000", "")]
+        return []
+
+    with patch(
+        "app.services.automation_engine.sheets_client.get_column_values", return_value=set()
+    ), patch(
+        "app.services.automation_engine.sheets_client.get_columns", side_effect=fake_get_columns
+    ), patch(
+        "app.services.automation_engine.classifier.master_repository.find_party_candidates",
+        return_value=[{"Account Head": "Bank Charges", "Parent Account Head": "BANK CHARGES"}],
+    ):
+        transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
+
+    assert len(transactions) == 1
+    assert transactions[0].destination == "duplicate"
+
+
+def test_no_reference_transaction_not_duplicate_when_amount_differs():
+    # Same Narration, different amount - two genuinely distinct transactions
+    # (e.g. the same recurring bank charge on two different dates) must NOT
+    # be flagged as duplicates of each other.
+    narration = "Payment Disbursement (Purpose: Bank Charges) | To: LF CHG CA AC | Ref: N/A | BU: HO | Head: Bank Charges"
+    bank_rows = [
+        {
+            "SL#": "1",
+            "REFERENCE": "N/A",
+            "DESCRIPTION": narration,
+            "NARRATION": narration,
+            "TXN DATE": "08-Apr-2026",
+            "DEBITS": "7500",
+            "CREDITS": "",
+            "BUSINESS UNIT": "HO",
+            "source_sheet": "BOM 905",
+        }
+    ]
+
+    def fake_get_columns(sheet_id, worksheet_name, columns):
+        if worksheet_name == "LedgerDetails" and columns == ["Narration", "Debit Amount", "Credit Amount"]:
+            return [(narration, "5,000", "")]
+        return []
+
+    with patch(
+        "app.services.automation_engine.sheets_client.get_column_values", return_value=set()
+    ), patch(
+        "app.services.automation_engine.sheets_client.get_columns", side_effect=fake_get_columns
+    ), patch(
+        "app.services.automation_engine.classifier.master_repository.find_party_candidates",
+        return_value=[{"Account Head": "Bank Charges", "Parent Account Head": "BANK CHARGES"}],
+    ):
+        transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
+
+    assert len(transactions) == 1
+    assert transactions[0].destination != "duplicate"
+
+
+def test_no_reference_transaction_not_duplicate_when_narration_differs():
+    bank_rows = [
+        {
+            "SL#": "1",
+            "REFERENCE": "N/A",
+            "DESCRIPTION": "Payment Disbursement (Purpose: Bank Charges) | To: LF CHG CA AC | Ref: N/A | BU: HO | Head: Bank Charges",
+            "NARRATION": "Payment Disbursement (Purpose: Bank Charges) | To: LF CHG CA AC | Ref: N/A | BU: HO | Head: Bank Charges",
+            "TXN DATE": "08-Apr-2026",
+            "DEBITS": "5000",
+            "CREDITS": "",
+            "BUSINESS UNIT": "HO",
+            "source_sheet": "BOM 905",
+        }
+    ]
+
+    def fake_get_columns(sheet_id, worksheet_name, columns):
+        if worksheet_name == "LedgerDetails" and columns == ["Narration", "Debit Amount", "Credit Amount"]:
+            return [("A completely different narration text", "5,000", "")]
+        return []
+
+    with patch(
+        "app.services.automation_engine.sheets_client.get_column_values", return_value=set()
+    ), patch(
+        "app.services.automation_engine.sheets_client.get_columns", side_effect=fake_get_columns
+    ), patch(
+        "app.services.automation_engine.classifier.master_repository.find_party_candidates",
+        return_value=[{"Account Head": "Bank Charges", "Parent Account Head": "BANK CHARGES"}],
+    ):
+        transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
+
+    assert len(transactions) == 1
+    assert transactions[0].destination != "duplicate"
+
+
+def test_reference_bearing_transaction_still_uses_reference_check_not_no_ref_fallback():
+    # A transaction with a real reference number must keep using the
+    # precise digit-match path - the (Narration, Amount) fallback should
+    # never even be consulted for it.
+    narration = "YIB-NEFT-YESME6203001855300-Rakiba BIBI-SBIN0007204-Contractor-STATE BANK OF INDIA"
+    bank_rows = [
+        {
+            "SL#": "1",
+            "REFERENCE": "YESME6203001855300",
+            "DESCRIPTION": narration,
+            "TXN DATE": "22-Jul-2026",
+            "DEBITS": "1000",
+            "CREDITS": "",
+            "BUSINESS UNIT": "Casa Romana",
+            "source_sheet": "YES Rera 0377",
+        }
+    ]
+
+    def fake_get_column_values(sheet_id, worksheet_name, column):
+        return set()  # not present in Narration - genuinely new
+
+    def fake_get_columns(sheet_id, worksheet_name, columns):
+        if worksheet_name == "LedgerDetails" and columns == ["Narration", "Debit Amount", "Credit Amount"]:
+            # Deliberately unrelated data - if the fallback were wrongly
+            # consulted for a reference-bearing row, this would not matter
+            # since it must never be reached in the first place.
+            return [(narration, "1,000", "")]
+        return []
+
+    with patch(
+        "app.services.automation_engine.sheets_client.get_column_values",
+        side_effect=fake_get_column_values,
+    ), patch(
+        "app.services.automation_engine.sheets_client.get_columns", side_effect=fake_get_columns
+    ), patch(
+        "app.services.automation_engine.classifier.master_repository.find_party_candidates",
+        return_value=[{"Account Head": "Rakiba BIBI", "Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS"}],
+    ):
+        transactions = _process_rows(bank_rows, run_id="test-run", settings=_FakeSettings())
+
+    assert len(transactions) == 1
+    assert transactions[0].destination != "duplicate"
+
+
 def test_narration_column_is_used_over_raw_description_when_present():
     # The source file's own pretty-formatted NARRATION column (computed by
     # the user's bank-statement spreadsheet) is what should end up on the
