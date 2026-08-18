@@ -401,10 +401,11 @@ def test_read_all_records_does_not_touch_header_when_already_present(monkeypatch
     assert result == [{"Link Ref Code": "1"}]
 
 
-def _make_mock_worksheet(title: str, col_count: int = 25):
+def _make_mock_worksheet(title: str, col_count: int = 25, sheet_id: int = 111):
     ws = MagicMock()
     ws.title = title
     ws.col_count = col_count
+    ws.id = sheet_id
     return ws
 
 
@@ -448,6 +449,41 @@ def test_clear_all_tabs_never_touches_header_row(monkeypatch):
 
     cleared_range = ws.batch_clear.call_args.args[0][0]
     assert cleared_range.startswith("A2:")
+
+
+def test_clear_all_tabs_also_clears_data_validation(monkeypatch):
+    # values.batchClear only erases cell values, never validation metadata -
+    # a leftover dropdown from a previous run must not survive a clear and
+    # silently misapply to unrelated future data.
+    ws1 = _make_mock_worksheet("ReceiptPayment", col_count=9, sheet_id=111)
+    ws2 = _make_mock_worksheet("LedgerDetails", col_count=31, sheet_id=222)
+    mock_spreadsheet = MagicMock()
+    mock_spreadsheet.worksheets.return_value = [ws1, ws2]
+    monkeypatch.setattr(sheets_client, "open_sheet", lambda sid: mock_spreadsheet)
+
+    sheets_client.clear_all_tabs("sheet1")
+
+    mock_spreadsheet.batch_update.assert_called_once()
+    requests = mock_spreadsheet.batch_update.call_args.args[0]["requests"]
+    assert len(requests) == 2
+    for request, sheet_id, col_count in zip(requests, (111, 222), (9, 31)):
+        validation_range = request["setDataValidation"]["range"]
+        assert validation_range["sheetId"] == sheet_id
+        assert validation_range["startRowIndex"] == 1
+        assert validation_range["startColumnIndex"] == 0
+        assert validation_range["endColumnIndex"] == col_count
+        assert "rule" not in request["setDataValidation"]
+
+
+def test_clear_all_tabs_skips_validation_clear_for_info_only_spreadsheet(monkeypatch):
+    info_ws = _make_mock_worksheet("Info")
+    mock_spreadsheet = MagicMock()
+    mock_spreadsheet.worksheets.return_value = [info_ws]
+    monkeypatch.setattr(sheets_client, "open_sheet", lambda sid: mock_spreadsheet)
+
+    sheets_client.clear_all_tabs("sheet1")
+
+    mock_spreadsheet.batch_update.assert_not_called()
 
 
 def test_read_all_records_raises_for_unknown_sheet_with_missing_header(monkeypatch):

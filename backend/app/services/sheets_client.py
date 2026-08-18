@@ -327,16 +327,36 @@ def clear_all_tabs(sheet_id: str) -> list[str]:
     """Erase every data row (row 2 downward) from every tab in this
     spreadsheet, except "Info" - header row 1 is never touched on any tab.
 
+    Also clears any data validation (e.g. an Account Head dropdown left over
+    from a previous run's ambiguous transaction) from the same cleared range
+    - values.batchClear only erases cell values, never validation/formatting
+    metadata, so a validation rule left in place would otherwise stay
+    physically pinned to its row and silently misapply to whatever
+    unrelated transaction a later run happens to write into that same row.
+
     Tabs are discovered dynamically from the live spreadsheet rather than a
     hardcoded list, so this stays correct even if tabs are added later.
     Returns the list of tab names actually cleared.
     """
     spreadsheet = open_sheet(sheet_id)
     cleared: list[str] = []
+    validation_requests = []
     for worksheet in spreadsheet.worksheets():
         if worksheet.title in _CLEAR_EXCLUDED_WORKSHEETS:
             continue
         last_col_letter = _column_letter(max(worksheet.col_count, 1))
         worksheet.batch_clear([f"A2:{last_col_letter}"])
+        validation_requests.append({
+            "setDataValidation": {
+                "range": {
+                    "sheetId": worksheet.id,
+                    "startRowIndex": 1,
+                    "startColumnIndex": 0,
+                    "endColumnIndex": max(worksheet.col_count, 1),
+                }
+            }
+        })
         cleared.append(worksheet.title)
+    if validation_requests:
+        spreadsheet.batch_update({"requests": validation_requests})
     return cleared
