@@ -13,6 +13,13 @@ _STOPWORDS = {
 
 _WORD_RE = re.compile(r"[A-Za-z]{3,}")
 
+# Placeholder shown in a synthesized dropdown label (dropdown_targets()) for
+# a candidate whose real Parent Account Head is blank in Master - e.g.
+# "Imprest (No Parent Head)". automation_engine's formula that extracts
+# Parent Account Head from the selected label special-cases this exact text
+# back to a blank cell, since it's a display placeholder, not a real head.
+NO_PARENT_HEAD_LABEL = "No Parent Head"
+
 
 @dataclass
 class ResolveResult:
@@ -95,14 +102,29 @@ def dropdown_targets(candidates: list[dict]) -> dict[str, list[str]]:
     seen = set()
     for candidate in candidates:
         head = str(candidate.get("Account Head", "")).strip()
-        parent = str(candidate.get("Parent Account Head", "")).strip()
-        if not head or not parent:
+        if not head:
             continue
-        label = f"{head} ({parent})"
+        parent = str(candidate.get("Parent Account Head", "")).strip()
+        label = f"{head} ({parent})" if parent else f"{head} ({NO_PARENT_HEAD_LABEL})"
         if label not in seen:
             seen.add(label)
             values.append(label)
     return {"Account Head": values} if len(values) >= 2 else {}
+
+
+def uses_synthesized_labels(candidates: list[dict]) -> bool:
+    """True when dropdown_targets() would take the synthesized
+    "Head (Parent)" label branch for this candidate set - i.e. Account Head
+    text alone doesn't distinguish the candidates, so Parent Account Head is
+    encoded into the dropdown value itself. Mirrors dropdown_targets()'s own
+    branch condition exactly, so callers (e.g. automation_engine, deciding
+    whether to attach a Parent-Account-Head-extracting formula) never drift
+    from what the dropdown actually offers.
+    """
+    if len(candidates) < 2:
+        return False
+    account_heads = [str(c.get("Account Head", "")).strip() for c in candidates]
+    return len(set(h for h in account_heads if h)) < 2
 
 
 def _keywords(text: str) -> set[str]:

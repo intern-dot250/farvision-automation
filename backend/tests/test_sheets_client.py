@@ -292,6 +292,42 @@ def test_add_cell_note_no_op_for_unknown_column(monkeypatch):
     mock_ws.insert_note.assert_not_called()
 
 
+def test_column_letter_for_returns_the_letter_for_a_known_column(monkeypatch):
+    mock_ws = MagicMock()
+    mock_ws.row_values.return_value = ["Link Ref Code", "Account Head", "Parent Account Head"]
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    assert sheets_client.column_letter_for("sheet1", "LedgerDetails", "Parent Account Head") == "C"
+
+
+def test_column_letter_for_returns_none_for_unknown_column(monkeypatch):
+    mock_ws = MagicMock()
+    mock_ws.row_values.return_value = ["Link Ref Code"]
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    assert sheets_client.column_letter_for("sheet1", "LedgerDetails", "Account Head") is None
+
+
+def test_set_cell_formula_writes_with_user_entered_input_option(monkeypatch):
+    mock_ws = MagicMock()
+    mock_ws.row_values.return_value = ["Link Ref Code", "Account Head", "Parent Account Head"]
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    sheets_client.set_cell_formula("sheet1", "LedgerDetails", 7, "Parent Account Head", "=A1")
+
+    mock_ws.update.assert_called_once_with(range_name="C7", values=[["=A1"]], value_input_option="USER_ENTERED")
+
+
+def test_set_cell_formula_no_op_for_unknown_column(monkeypatch):
+    mock_ws = MagicMock()
+    mock_ws.row_values.return_value = ["Link Ref Code"]
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    sheets_client.set_cell_formula("sheet1", "LedgerDetails", 7, "Parent Account Head", "=A1")
+
+    mock_ws.update.assert_not_called()
+
+
 class _FakeSettings:
     RECEIPT_PAYMENT_SHEET_ID = "rp-sheet-id"
     DEPOSIT_WITHDRAWAL_SHEET_ID = "dw-sheet-id"

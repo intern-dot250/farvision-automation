@@ -294,6 +294,28 @@ def test_ledger_details_parent_account_head_prefers_master_when_present():
     assert rows["LedgerDetails"][0]["Parent Account Head"] == "SUNDRY CREDITORS - CONTRACTORS"
 
 
+def test_adjustment_details_row_is_generated_when_parent_account_head_present():
+    txn = _receipt_payment_txn("Contractor", {"Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS"})
+    rows = _build_receipt_payment_rows(txn, link_ref_code=4)
+
+    assert len(rows["AdjustmentDetails"]) == 1
+    assert rows["AdjustmentDetails"][0]["Link Ref Code"] == 4
+
+
+def test_adjustment_details_row_is_skipped_when_parent_account_head_blank():
+    # An Override Rule's Account Head can have a blank Parent Account Head in
+    # Master itself - Adjustment Details must be left blank for that
+    # transaction rather than written with a placeholder. Nothing else about
+    # the transaction (ReceiptPayment, LedgerDetails, ...) is affected.
+    txn = _receipt_payment_txn("", {"Parent Account Head": ""})
+    rows = _build_receipt_payment_rows(txn, link_ref_code=4)
+
+    assert rows["AdjustmentDetails"] == []
+    assert rows["LedgerDetails"][0]["Parent Account Head"] == ""
+    assert len(rows["ReceiptPayment"]) == 1
+    assert len(rows["LedgerDetails"]) == 1
+
+
 def test_contractor_head_gets_two_import_tax_info_rows():
     txn = _receipt_payment_txn("Contractor", {"Description": "TDS ON CONTRACTORS"})
     rows = _build_receipt_payment_rows(txn, link_ref_code=7)
@@ -1610,6 +1632,10 @@ def test_attach_ambiguous_dropdowns_calls_add_dropdown_for_every_ambiguous_trans
         "app.services.automation_engine.sheets_client.add_dropdown_validation"
     ) as mock_add, patch(
         "app.services.automation_engine.sheets_client.add_cell_note"
+    ), patch(
+        "app.services.automation_engine.sheets_client.column_letter_for", return_value="B"
+    ), patch(
+        "app.services.automation_engine.sheets_client.set_cell_formula"
     ):
         _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")
 
@@ -1623,9 +1649,9 @@ def test_attach_ambiguous_dropdowns_calls_add_dropdown_for_every_ambiguous_trans
 
 
 def test_attach_ambiguous_dropdowns_also_attaches_a_verification_note():
-    # Parent Account Head can't be auto-updated when someone picks from the
-    # Account Head dropdown - a cell note must explain that it needs manual
-    # verification.
+    # Even though Parent Account Head auto-fills via formula for this
+    # (identical-Account-Head-text) ambiguity shape, a cell note still
+    # explains what happened.
     txn = _ambiguous_txn(_CANDIDATES)
 
     with patch(
@@ -1634,13 +1660,74 @@ def test_attach_ambiguous_dropdowns_also_attaches_a_verification_note():
         "app.services.automation_engine.sheets_client.add_dropdown_validation"
     ), patch(
         "app.services.automation_engine.sheets_client.add_cell_note"
-    ) as mock_note:
+    ) as mock_note, patch(
+        "app.services.automation_engine.sheets_client.column_letter_for", return_value="B"
+    ), patch(
+        "app.services.automation_engine.sheets_client.set_cell_formula"
+    ):
         _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")
 
     mock_note.assert_called_once()
     args = mock_note.call_args.args
     assert args[:4] == ("rp-sheet-id", "LedgerDetails", 5, "Account Head")
     assert "Parent Account Head" in args[4]
+
+
+def test_attach_ambiguous_dropdowns_writes_parent_account_head_formula_for_synthesized_labels():
+    # These candidates share identical Account Head text ("RAJESH KUMAR"),
+    # so the dropdown offers synthesized "Head (Parent)" labels - Parent
+    # Account Head must auto-fill from whichever label gets picked, via a
+    # live formula that extracts the parenthesized part.
+    txn = _ambiguous_txn(_CANDIDATES)
+
+    with patch(
+        "app.services.automation_engine.sheets_client.find_row_number", return_value=5
+    ), patch(
+        "app.services.automation_engine.sheets_client.add_dropdown_validation"
+    ), patch(
+        "app.services.automation_engine.sheets_client.add_cell_note"
+    ), patch(
+        "app.services.automation_engine.sheets_client.column_letter_for", return_value="B"
+    ) as mock_letter, patch(
+        "app.services.automation_engine.sheets_client.set_cell_formula"
+    ) as mock_formula:
+        _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")
+
+    mock_letter.assert_called_once_with("rp-sheet-id", "LedgerDetails", "Account Head")
+    mock_formula.assert_called_once()
+    args = mock_formula.call_args.args
+    assert args[:4] == ("rp-sheet-id", "LedgerDetails", 5, "Parent Account Head")
+    formula = args[4]
+    assert formula.startswith("=")
+    assert "B5" in formula
+
+
+def test_attach_ambiguous_dropdowns_does_not_write_formula_when_account_head_text_differs():
+    # When Account Head text itself distinguishes the candidates, the
+    # dropdown values are the plain real Account Head strings - there's
+    # nothing to extract, and the old manual-verification note still stands.
+    candidates = [
+        {"Account Head": "RAJESH KUMAR", "Parent Account Head": "SUNDRY CREDITORS - OTHER"},
+        {"Account Head": "RAJESH K. SHARMA", "Parent Account Head": "GENERAL CATEGORY-FLATS"},
+    ]
+    txn = _ambiguous_txn(candidates)
+
+    with patch(
+        "app.services.automation_engine.sheets_client.find_row_number", return_value=5
+    ), patch(
+        "app.services.automation_engine.sheets_client.add_dropdown_validation"
+    ), patch(
+        "app.services.automation_engine.sheets_client.add_cell_note"
+    ) as mock_note, patch(
+        "app.services.automation_engine.sheets_client.column_letter_for"
+    ) as mock_letter, patch(
+        "app.services.automation_engine.sheets_client.set_cell_formula"
+    ) as mock_formula:
+        _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")
+
+    mock_letter.assert_not_called()
+    mock_formula.assert_not_called()
+    assert "not updated automatically" in mock_note.call_args.args[4]
 
 
 def test_attach_ambiguous_dropdowns_skips_non_ambiguous_transactions():
@@ -1672,6 +1759,10 @@ def test_attach_ambiguous_dropdowns_retries_once_then_logs_error_on_final_failur
     ) as mock_add, patch(
         "app.services.automation_engine.sheets_client.add_cell_note"
     ), patch(
+        "app.services.automation_engine.sheets_client.column_letter_for", return_value="B"
+    ), patch(
+        "app.services.automation_engine.sheets_client.set_cell_formula"
+    ), patch(
         "app.services.automation_engine.ledger_repository.log_audit"
     ) as mock_log:
         _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")
@@ -1693,6 +1784,10 @@ def test_attach_ambiguous_dropdowns_recovers_on_retry():
     ) as mock_add, patch(
         "app.services.automation_engine.sheets_client.add_cell_note"
     ), patch(
+        "app.services.automation_engine.sheets_client.column_letter_for", return_value="B"
+    ), patch(
+        "app.services.automation_engine.sheets_client.set_cell_formula"
+    ), patch(
         "app.services.automation_engine.ledger_repository.log_audit"
     ) as mock_log:
         _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")
@@ -1712,6 +1807,10 @@ def test_attach_ambiguous_dropdowns_note_retries_once_then_logs_error_on_final_f
         "app.services.automation_engine.sheets_client.add_cell_note",
         side_effect=RuntimeError("Sheets API hiccup"),
     ) as mock_note, patch(
+        "app.services.automation_engine.sheets_client.column_letter_for", return_value="B"
+    ), patch(
+        "app.services.automation_engine.sheets_client.set_cell_formula"
+    ), patch(
         "app.services.automation_engine.ledger_repository.log_audit"
     ) as mock_log:
         _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")
@@ -1734,6 +1833,11 @@ def test_attach_ambiguous_dropdowns_failure_never_raises():
     ), patch(
         "app.services.automation_engine.sheets_client.add_cell_note",
         side_effect=RuntimeError("permanent failure"),
+    ), patch(
+        "app.services.automation_engine.sheets_client.column_letter_for",
+        side_effect=RuntimeError("permanent failure"),
+    ), patch(
+        "app.services.automation_engine.sheets_client.set_cell_formula"
     ), patch(
         "app.services.automation_engine.ledger_repository.log_audit"
     ):

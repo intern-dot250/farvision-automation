@@ -12,6 +12,11 @@
 # stale value from the pre-override payee) - the normal (non-overridden)
 # path already guarantees a non-blank value via its own fallback chain, so
 # this only actually goes blank in that specific, intentional case.
+# AdjustmentDetails has no entry here - deliberately. It's optional per
+# transaction: automation_engine._build_receipt_payment_rows skips writing an
+# AdjustmentDetails row at all when the transaction's Parent Account Head is
+# blank, so there's nothing to require, and this must stay true for the skip
+# to never trigger an import error.
 REQUIRED_FIELDS: dict[str, list[str]] = {
     "ReceiptPayment": ["Link Ref Code", "Financial Year", "Document Type", "Document Date"],
     "DepositWithdrawal": ["Link Ref Code", "Financial Year", "Document Type", "Document Date"],

@@ -101,6 +101,35 @@ def test_receipt_payment_ledger_details_does_not_require_parent_account_head():
     assert validate_rows(rows) == []
 
 
+def test_blank_adjustment_details_never_fails_validation():
+    # automation_engine skips the AdjustmentDetails row entirely for a
+    # transaction whose Parent Account Head is blank - validation must never
+    # error on that empty list.
+    rows = {
+        "ReceiptPayment": [
+            {
+                "Link Ref Code": 5,
+                "Financial Year": "01-04-2026-31-03-2027",
+                "Document Type": "RECEIPT / PAYMENT",
+                "Document Date": "22/07/2026",
+            }
+        ],
+        "LedgerDetails": [
+            {
+                "Link Ref Code": 5,
+                "Debit/Credit": "Debit",
+                "Account Head": "Rakiba BIBI",
+                "Parent Account Head": "",
+                "Payment Mode": "Direct",
+                "Payee Name": "Rakiba BIBI",
+            }
+        ],
+        "AdjustmentDetails": [],
+    }
+
+    assert validate_rows(rows) == []
+
+
 def test_document_no_is_not_required_despite_sheet_flag():
     rows = {
         "ReceiptPayment": [

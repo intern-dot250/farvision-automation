@@ -325,6 +325,7 @@ def _build_receipt_payment_rows(txn: TransactionRowSet, link_ref_code: int) -> d
     bank_name = _resolve_own_bank_name(
         txn.source_sheet, matched, txn.classification.bank_name
     )
+    parent_account_head = matched.get("Parent Account Head") or txn.classification.head
 
     return {
         "ReceiptPayment": [
@@ -357,24 +358,36 @@ def _build_receipt_payment_rows(txn: TransactionRowSet, link_ref_code: int) -> d
                 # LedgerDetails required-field check and gets wrongly
                 # rerouted to review just because neither source has a name.
                 "Account Head": matched.get("Account Head") or txn.classification.payee_name or txn.classification.head,
-                "Parent Account Head": matched.get("Parent Account Head") or txn.classification.head,
+                "Parent Account Head": parent_account_head,
                 "Debit Amount": _format_amount(txn.debit),
                 "Credit Amount": _format_amount(txn.credit),
                 "Payment Mode": "Direct",
                 "Payee Name": txn.classification.payee_name or txn.classification.head,
             }
         ],
-        "AdjustmentDetails": [
-            {
-                "Link Ref Code": link_ref_code,
-                "Detail Link Ref Code": link_ref_code,
-                "Docno": matched.get("Docno") or "ON A/C",
-                "Date": doc_date,
-                "Invoice No": matched.get("Invoice No") or "Normal",
-                "Invoice Date": doc_date,
-                "Adjustment Amount": _format_amount(txn.debit or txn.credit),
-            }
-        ],
+        # Adjustment Details only makes sense against a real Parent Account
+        # Head (it's what Farvision reconciles the adjustment against) - when
+        # it's blank (e.g. an Override Rule's Account Head has no Parent
+        # Account Head in Master), leave this tab's row out entirely rather
+        # than write one with a placeholder. Safe to skip: AdjustmentDetails
+        # isn't in validation.REQUIRED_FIELDS, and every tab is joined by
+        # Link Ref Code (not row position), so a missing row here never
+        # shifts or breaks any other transaction's data.
+        "AdjustmentDetails": (
+            [
+                {
+                    "Link Ref Code": link_ref_code,
+                    "Detail Link Ref Code": link_ref_code,
+                    "Docno": matched.get("Docno") or "ON A/C",
+                    "Date": doc_date,
+                    "Invoice No": matched.get("Invoice No") or "Normal",
+                    "Invoice Date": doc_date,
+                    "Adjustment Amount": _format_amount(txn.debit or txn.credit),
+                }
+            ]
+            if str(parent_account_head or "").strip()
+            else []
+        ),
         "ImportTaxInfo": _build_import_tax_info_rows(txn, link_ref_code, matched),
     }
 
@@ -768,6 +781,27 @@ _AMBIGUOUS_ACCOUNT_HEAD_NOTE = (
     "still matches it - it was not updated automatically."
 )
 
+# Used instead of _AMBIGUOUS_ACCOUNT_HEAD_NOTE when the dropdown options are
+# synthesized "Head (Parent)" labels (account_head_resolver.uses_synthesized_
+# labels) - Parent Account Head auto-fills from the picked label via a
+# formula in that case, so the note only needs to explain what's happening,
+# not ask for a manual fix.
+_AMBIGUOUS_ACCOUNT_HEAD_NOTE_AUTO = (
+    "Multiple Master entries share this Account Head name with different "
+    "Parent Account Head values. Pick the correct one from the dropdown - "
+    "Parent Account Head fills in automatically from your selection."
+)
+
+# Extracts the text inside the trailing "(...)" of the Account Head cell
+# (the picked dropdown label, e.g. "Imprest (SALARY PAYABLE)") into Parent
+# Account Head - recalculates live on every dropdown change, no trigger
+# needed. The NO_PARENT_HEAD_LABEL placeholder maps back to a blank cell,
+# since it's a display-only stand-in, not a real Parent Account Head value.
+_PARENT_ACCOUNT_HEAD_FORMULA = (
+    '=IFERROR(IF(REGEXEXTRACT({cell},"\\(([^)]+)\\)$")="{placeholder}","",'
+    'TRIM(REGEXEXTRACT({cell},"\\(([^)]+)\\)$"))),"")'
+)
+
 
 def _attach_ambiguous_dropdowns(transactions: list[TransactionRowSet], settings, run_id: str) -> None:
     """After a real (non-dry-run) write, attach an in-sheet dropdown to the
@@ -830,11 +864,14 @@ def _attach_ambiguous_dropdowns(transactions: list[TransactionRowSet], settings,
                         {"reference": txn.reference, "column": column, "error": str(exc)},
                     )
 
+        synthesized = "Account Head" in targets and account_head_resolver.uses_synthesized_labels(candidates)
+        note_text = _AMBIGUOUS_ACCOUNT_HEAD_NOTE_AUTO if synthesized else _AMBIGUOUS_ACCOUNT_HEAD_NOTE
+
         for attempt in (1, 2):
             try:
                 sheets_client.add_cell_note(
                     settings.RECEIPT_PAYMENT_SHEET_ID, "LedgerDetails", row_number, "Account Head",
-                    _AMBIGUOUS_ACCOUNT_HEAD_NOTE,
+                    note_text,
                 )
                 break
             except Exception as exc:
@@ -847,6 +884,34 @@ def _attach_ambiguous_dropdowns(transactions: list[TransactionRowSet], settings,
                     run_id, "error", f"Failed to attach Account Head note for SL#{txn.sl_no}",
                     {"reference": txn.reference, "error": str(exc)},
                 )
+
+        if synthesized:
+            for attempt in (1, 2):
+                try:
+                    account_head_letter = sheets_client.column_letter_for(
+                        settings.RECEIPT_PAYMENT_SHEET_ID, "LedgerDetails", "Account Head"
+                    )
+                    if account_head_letter is not None:
+                        formula = _PARENT_ACCOUNT_HEAD_FORMULA.format(
+                            cell=f"{account_head_letter}{row_number}",
+                            placeholder=account_head_resolver.NO_PARENT_HEAD_LABEL,
+                        )
+                        sheets_client.set_cell_formula(
+                            settings.RECEIPT_PAYMENT_SHEET_ID, "LedgerDetails", row_number,
+                            "Parent Account Head", formula,
+                        )
+                    break
+                except Exception as exc:
+                    if attempt < 2:
+                        continue
+                    logger.error(
+                        f"[{run_id}] Failed to attach Parent Account Head formula for SL#{txn.sl_no}: {exc}"
+                    )
+                    ledger_repository.log_audit(
+                        run_id, "error",
+                        f"Failed to attach Parent Account Head formula for SL#{txn.sl_no}",
+                        {"reference": txn.reference, "error": str(exc)},
+                    )
 
 
 def _distinct_sheet_names(bank_rows: list[dict]) -> list[str]:

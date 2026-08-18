@@ -302,6 +302,31 @@ def add_dropdown_validation(
     )
 
 
+def column_letter_for(sheet_id: str, worksheet_name: str, column: str) -> str | None:
+    """Spreadsheet column letter (e.g. "F") for a named header column, or
+    None if `column` isn't a real header - used to build a cell reference
+    (e.g. for a formula referring to another cell in the same row)."""
+    header = get_worksheet(sheet_id, worksheet_name).row_values(1)
+    if column not in header:
+        return None
+    return _column_letter(header.index(column) + 1)
+
+
+def set_cell_formula(sheet_id: str, worksheet_name: str, row_number: int, column: str, formula: str) -> None:
+    """Write a live formula (e.g. one that extracts Parent Account Head out
+    of an Account Head dropdown's selected label) into one cell of an
+    already-written row. Uses USER_ENTERED, unlike append_records' RAW mode
+    - a leading "=" is only evaluated as a formula under USER_ENTERED, so it
+    needs its own write path. No-op if `column` isn't a real header.
+    """
+    worksheet = get_worksheet(sheet_id, worksheet_name)
+    header = worksheet.row_values(1)
+    if column not in header:
+        return
+    letter = _column_letter(header.index(column) + 1)
+    worksheet.update(range_name=f"{letter}{row_number}", values=[[formula]], value_input_option="USER_ENTERED")
+
+
 def add_cell_note(sheet_id: str, worksheet_name: str, row_number: int, column: str, note_text: str) -> None:
     """Attach a plain cell note (the small red-corner comment, not a
     validation dropdown) to one cell of an already-written row - used

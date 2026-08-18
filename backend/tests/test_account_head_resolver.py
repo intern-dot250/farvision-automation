@@ -77,6 +77,44 @@ def test_dropdown_targets_empty_when_nothing_distinguishes_candidates():
     assert account_head_resolver.dropdown_targets(candidates) == {}
 
 
+def test_dropdown_targets_includes_a_candidate_with_blank_parent_account_head():
+    # "Imprest"-style case: one of the duplicate Master rows has no Parent
+    # Account Head at all - it must still be a selectable dropdown option,
+    # not silently dropped.
+    candidates = [
+        _row("IMPREST", "SITE IMPREST"),
+        _row("IMPREST", ""),
+    ]
+    targets = account_head_resolver.dropdown_targets(candidates)
+    assert set(targets["Account Head"]) == {
+        "IMPREST (SITE IMPREST)",
+        f"IMPREST ({account_head_resolver.NO_PARENT_HEAD_LABEL})",
+    }
+
+
+# --- uses_synthesized_labels ---
+
+
+def test_uses_synthesized_labels_true_when_account_head_text_is_identical():
+    candidates = [
+        _row("RAJESH KUMAR", "SUNDRY CREDITORS - OTHER"),
+        _row("RAJESH KUMAR", "GENERAL CATEGORY-FLATS"),
+    ]
+    assert account_head_resolver.uses_synthesized_labels(candidates) is True
+
+
+def test_uses_synthesized_labels_false_when_account_head_text_differs():
+    candidates = [
+        _row("RAJESH KUMAR", "SUNDRY CREDITORS - OTHER"),
+        _row("RAJESH K. SHARMA", "GENERAL CATEGORY-FLATS"),
+    ]
+    assert account_head_resolver.uses_synthesized_labels(candidates) is False
+
+
+def test_uses_synthesized_labels_false_for_single_candidate():
+    assert account_head_resolver.uses_synthesized_labels([_row("MUKESH KUMAR", "SUNDRY CREDITORS")]) is False
+
+
 # --- resolve(): the 7 required scenarios ---
 
 
