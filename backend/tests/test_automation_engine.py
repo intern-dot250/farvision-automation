@@ -7,6 +7,7 @@ from app.services.automation_engine import (
     TransactionRowSet,
     _assign_rows,
     _attach_ambiguous_dropdowns,
+    _attach_tax_info_description_dropdowns,
     _build_deposit_withdrawal_rows,
     _build_receipt_payment_rows,
     _compute_narration_from_formula,
@@ -14,6 +15,7 @@ from app.services.automation_engine import (
     _format_amount,
     _normalize_business_unit,
     _process_rows,
+    _write_transactions,
     clear_destination_data,
 )
 from app.services.classifier import ClassificationResult
@@ -1871,6 +1873,144 @@ def test_attach_ambiguous_dropdowns_skips_deposit_withdrawal_destination():
         _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")
 
     mock_find.assert_not_called()
+
+
+# --- _write_transactions: wiring to _attach_tax_info_description_dropdowns ---
+
+
+def test_write_transactions_attaches_tax_info_dropdowns_with_correct_start_row():
+    txn = _receipt_payment_txn("Contractor", {"Deduction Type": "Tax deducted at source", "Description": "TDS ON CONTRACTORS"})
+    txn.rows = {
+        "ImportTaxInfo": [
+            {"Link Ref Code": 1, "Deduction Type": "Tax deducted at source", "Description": "TDS ON CONTRACTORS"},
+            {"Link Ref Code": 1, "Deduction Type": "", "Description": ""},
+        ]
+    }
+
+    with patch(
+        "app.services.automation_engine.sheets_client.append_records"
+    ), patch(
+        "app.services.automation_engine.sheets_client.count_data_rows", return_value=9
+    ), patch(
+        "app.services.automation_engine.ledger_repository.log_audit"
+    ), patch(
+        "app.services.automation_engine._attach_tax_info_description_dropdowns"
+    ) as mock_attach:
+        _write_transactions([txn], _FakeSettings(), run_id="test-run")
+
+    # start_row = count_data_rows(...) + 2 = 9 + 2 = 11
+    args = mock_attach.call_args.args
+    assert args[0] == txn.rows["ImportTaxInfo"]
+    assert args[1] == 11
+    assert args[3] == "test-run"
+
+
+def test_write_transactions_skips_tax_info_dropdown_step_when_no_import_tax_info_rows():
+    txn = _internal_txn("DWARKADHIS PROJECTS PVT LTD")
+    txn.rows = {"DepositWithdrawal": [{"Link Ref Code": 1}]}
+
+    with patch(
+        "app.services.automation_engine.sheets_client.append_records"
+    ), patch(
+        "app.services.automation_engine.sheets_client.count_data_rows"
+    ) as mock_count, patch(
+        "app.services.automation_engine._attach_tax_info_description_dropdowns"
+    ) as mock_attach:
+        _write_transactions([txn], _FakeSettings(), run_id="test-run")
+
+    mock_count.assert_not_called()
+    mock_attach.assert_not_called()
+
+
+# --- _attach_tax_info_description_dropdowns ---
+
+
+def test_attach_tax_info_description_dropdowns_attaches_only_to_tds_rows():
+    rows = [
+        {"Link Ref Code": 1, "Deduction Type": "Tax deducted at source", "Description": "TDS ON CONTRACTORS"},
+        {"Link Ref Code": 1, "Deduction Type": "", "Description": ""},
+        {"Link Ref Code": 2, "Deduction Type": "", "Description": ""},
+    ]
+
+    with patch(
+        "app.services.automation_engine.master_repository.list_tds_descriptions",
+        return_value=["TDS ON CONTRACTORS", "TDS ON RENT PAID"],
+    ), patch(
+        "app.services.automation_engine.sheets_client.add_dropdown_validation"
+    ) as mock_add:
+        _attach_tax_info_description_dropdowns(rows, start_row=2, settings=_FakeSettings(), run_id="test-run")
+
+    # Row 0 (offset 0 -> sheet row 2) is the only TDS row - rows 1 and 2
+    # (blank Deduction Type) never get a dropdown, nothing forced onto them.
+    mock_add.assert_called_once_with(
+        "rp-sheet-id", "ImportTaxInfo", 2, "Description", ["TDS ON CONTRACTORS", "TDS ON RENT PAID"],
+    )
+
+
+def test_attach_tax_info_description_dropdowns_computes_row_numbers_from_write_order():
+    # A Contractor's 2 ImportTaxInfo rows share one Link Ref Code - row
+    # numbers must come from position in the write order, not a Link Ref
+    # Code lookup (which can't disambiguate them).
+    rows = [
+        {"Link Ref Code": 5, "Deduction Type": "", "Description": ""},
+        {"Link Ref Code": 6, "Deduction Type": "Tax deducted at source", "Description": "TDS ON SALARY"},
+        {"Link Ref Code": 6, "Deduction Type": "", "Description": ""},
+    ]
+
+    with patch(
+        "app.services.automation_engine.master_repository.list_tds_descriptions",
+        return_value=["TDS ON SALARY"],
+    ), patch(
+        "app.services.automation_engine.sheets_client.add_dropdown_validation"
+    ) as mock_add:
+        _attach_tax_info_description_dropdowns(rows, start_row=10, settings=_FakeSettings(), run_id="test-run")
+
+    mock_add.assert_called_once_with("rp-sheet-id", "ImportTaxInfo", 11, "Description", ["TDS ON SALARY"])
+
+
+def test_attach_tax_info_description_dropdowns_no_op_when_master_has_no_tds_descriptions():
+    rows = [{"Link Ref Code": 1, "Deduction Type": "Tax deducted at source", "Description": "X"}]
+
+    with patch(
+        "app.services.automation_engine.master_repository.list_tds_descriptions", return_value=[]
+    ), patch(
+        "app.services.automation_engine.sheets_client.add_dropdown_validation"
+    ) as mock_add:
+        _attach_tax_info_description_dropdowns(rows, start_row=2, settings=_FakeSettings(), run_id="test-run")
+
+    mock_add.assert_not_called()
+
+
+def test_attach_tax_info_description_dropdowns_retries_once_then_logs_error_on_final_failure():
+    rows = [{"Link Ref Code": 1, "Deduction Type": "Tax deducted at source", "Description": "X"}]
+
+    with patch(
+        "app.services.automation_engine.master_repository.list_tds_descriptions", return_value=["TDS ON SALARY"]
+    ), patch(
+        "app.services.automation_engine.sheets_client.add_dropdown_validation",
+        side_effect=RuntimeError("Sheets API hiccup"),
+    ) as mock_add, patch(
+        "app.services.automation_engine.ledger_repository.log_audit"
+    ) as mock_log:
+        _attach_tax_info_description_dropdowns(rows, start_row=2, settings=_FakeSettings(), run_id="test-run")
+
+    assert mock_add.call_count == 2
+    mock_log.assert_called_once()
+    assert mock_log.call_args.args[1] == "error"
+
+
+def test_attach_tax_info_description_dropdowns_failure_never_raises():
+    rows = [{"Link Ref Code": 1, "Deduction Type": "Tax deducted at source", "Description": "X"}]
+
+    with patch(
+        "app.services.automation_engine.master_repository.list_tds_descriptions", return_value=["TDS ON SALARY"]
+    ), patch(
+        "app.services.automation_engine.sheets_client.add_dropdown_validation",
+        side_effect=RuntimeError("permanent failure"),
+    ), patch(
+        "app.services.automation_engine.ledger_repository.log_audit"
+    ):
+        _attach_tax_info_description_dropdowns(rows, start_row=2, settings=_FakeSettings(), run_id="test-run")  # must not raise
 
 
 # --- History index build (threaded into classify_transaction) ---

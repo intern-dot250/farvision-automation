@@ -761,6 +761,19 @@ def _write_transactions(transactions: list[TransactionRowSet], settings, run_id:
         for tab, rows in txn.rows.items():
             target.setdefault(tab, []).extend(rows)
 
+    # Captured before the append, since it's the row count that determines
+    # where the about-to-be-written ImportTaxInfo rows will land - needed by
+    # _attach_tax_info_description_dropdowns to compute each row's absolute
+    # sheet row without a post-hoc search (find_row_number can't be reused
+    # here: a Contractor transaction writes 2 ImportTaxInfo rows sharing the
+    # same Link Ref Code, so a search-from-bottom-by-Link-Ref-Code would find
+    # the wrong one).
+    import_tax_info_start_row = None
+    if "ImportTaxInfo" in rp_batches:
+        import_tax_info_start_row = (
+            sheets_client.count_data_rows(settings.RECEIPT_PAYMENT_SHEET_ID, "ImportTaxInfo") + 2
+        )
+
     try:
         for tab, rows in dw_batches.items():
             sheets_client.append_records(settings.DEPOSIT_WITHDRAWAL_SHEET_ID, tab, rows)
@@ -773,6 +786,11 @@ def _write_transactions(transactions: list[TransactionRowSet], settings, run_id:
     # The Sheet write above IS the record - duplicate-detection reads the
     # Reference column straight from the Sheet on the next run, so there's
     # no separate ledger to update here.
+
+    if import_tax_info_start_row is not None:
+        _attach_tax_info_description_dropdowns(
+            rp_batches["ImportTaxInfo"], import_tax_info_start_row, settings, run_id
+        )
 
 
 _AMBIGUOUS_ACCOUNT_HEAD_NOTE = (
@@ -912,6 +930,54 @@ def _attach_ambiguous_dropdowns(transactions: list[TransactionRowSet], settings,
                         f"Failed to attach Parent Account Head formula for SL#{txn.sl_no}",
                         {"reference": txn.reference, "error": str(exc)},
                     )
+
+
+def _attach_tax_info_description_dropdowns(
+    import_tax_info_rows: list[dict], start_row: int, settings, run_id: str
+) -> None:
+    """After a real (non-dry-run) write, attach a Description dropdown -
+    Master's current list of valid "Tax deducted at source" descriptions -
+    to every ImportTaxInfo row whose written Deduction Type is exactly that
+    value. Rows with a blank (or any other) Deduction Type are left
+    untouched - nothing is ever forced onto them.
+
+    Row numbers are computed directly from `start_row` plus each row's
+    position in `import_tax_info_rows` (the exact order just appended),
+    rather than looked up by Link Ref Code afterwards - a Contractor
+    transaction writes 2 ImportTaxInfo rows sharing the same Link Ref Code
+    (TDS row + a deliberately blank row), so a search-from-bottom lookup
+    would find the wrong one.
+
+    Same compulsory-but-non-blocking shape as _attach_ambiguous_dropdowns: a
+    transient failure is retried once, a final failure is logged loudly, and
+    nothing here can fail the run - the data write has already happened.
+    """
+    tds_descriptions = master_repository.list_tds_descriptions()
+    if not tds_descriptions:
+        return
+
+    for offset, row in enumerate(import_tax_info_rows):
+        if row.get("Deduction Type") != "Tax deducted at source":
+            continue
+        row_number = start_row + offset
+        for attempt in (1, 2):
+            try:
+                sheets_client.add_dropdown_validation(
+                    settings.RECEIPT_PAYMENT_SHEET_ID, "ImportTaxInfo", row_number,
+                    "Description", tds_descriptions,
+                )
+                break
+            except Exception as exc:
+                if attempt < 2:
+                    continue
+                logger.error(
+                    f"[{run_id}] Failed to attach Description dropdown for ImportTaxInfo "
+                    f"row {row_number}: {exc}"
+                )
+                ledger_repository.log_audit(
+                    run_id, "error", f"Failed to attach Description dropdown for ImportTaxInfo row {row_number}",
+                    {"link_ref_code": row.get("Link Ref Code"), "error": str(exc)},
+                )
 
 
 def _distinct_sheet_names(bank_rows: list[dict]) -> list[str]:

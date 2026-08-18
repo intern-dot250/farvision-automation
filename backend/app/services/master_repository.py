@@ -412,6 +412,26 @@ def find_deduction_for_head(
     return str(row["Deduction Type"]), str(row["Description"])
 
 
+def list_tds_descriptions() -> list[str]:
+    """Every distinct Description Master has on file for Deduction Type
+    "Tax deducted at source" - the flat, always-current option list for the
+    ImportTaxInfo Description dropdown (automation_engine.
+    _attach_tax_info_description_dropdowns). Reads the same cached Master
+    frame as every other lookup here, so a new TDS row in Master shows up
+    next run with no code change. Not scoped to any Account Head/Parent
+    Account Head - the dropdown offers every valid TDS description in
+    Master, not just ones relevant to one payee."""
+    df = _load_master_df()
+    if "Deduction Type" not in df.columns or "Description" not in df.columns:
+        return []
+    key = _normalize("Tax deducted at source")
+    matches = df[df["Deduction Type"].astype(str).apply(_normalize) == key]
+    descriptions = {
+        str(value).strip() for value in matches["Description"] if str(value).strip()
+    }
+    return sorted(descriptions)
+
+
 def clear_cache() -> None:
     """Force the next lookup to re-fetch Master from Sheets (e.g. after edits)."""
     _load_master_df.cache_clear()

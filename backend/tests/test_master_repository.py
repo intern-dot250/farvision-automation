@@ -323,6 +323,57 @@ def test_find_deduction_for_head_returns_paired_deduction_type_and_description(m
     assert result == ("Tax deducted at source", "TDS ON SALARY")
 
 
+def test_list_tds_descriptions_returns_sorted_deduped_descriptions(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [
+            {"Account Head": "A", "Deduction Type": "Tax deducted at source", "Description": "TDS ON CONTRACTORS"},
+            {"Account Head": "B", "Deduction Type": "Tax deducted at source", "Description": "TDS ON RENT PAID"},
+            {"Account Head": "C", "Deduction Type": "Tax deducted at source", "Description": "TDS ON CONTRACTORS"},
+        ]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    result = master_repository.list_tds_descriptions()
+
+    assert result == ["TDS ON CONTRACTORS", "TDS ON RENT PAID"]
+
+
+def test_list_tds_descriptions_ignores_other_deduction_types_and_blank_descriptions(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [
+            {"Account Head": "A", "Deduction Type": "Tax deducted at source", "Description": "TDS ON SALARY"},
+            {"Account Head": "B", "Deduction Type": "Goods and Service Tax", "Description": "GST ON VENDOR"},
+            {"Account Head": "C", "Deduction Type": "Tax deducted at source", "Description": ""},
+            {"Account Head": "D", "Deduction Type": "", "Description": ""},
+        ]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    result = master_repository.list_tds_descriptions()
+
+    assert result == ["TDS ON SALARY"]
+
+
+def test_list_tds_descriptions_is_case_insensitive_on_deduction_type(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [
+            {"Account Head": "A", "Deduction Type": "tax deducted at source", "Description": "TDS ON BROKERAGE COMMISSION"},
+        ]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    result = master_repository.list_tds_descriptions()
+
+    assert result == ["TDS ON BROKERAGE COMMISSION"]
+
+
+def test_list_tds_descriptions_returns_empty_list_when_columns_missing(monkeypatch):
+    df = pd.DataFrame.from_records([{"Account Head": "A"}])
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    assert master_repository.list_tds_descriptions() == []
+
+
 def test_find_party_candidates_returns_all_matching_rows(monkeypatch):
     df = pd.DataFrame.from_records(
         [
