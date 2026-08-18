@@ -1327,6 +1327,9 @@ def test_assign_rows_applies_matching_override_rule(monkeypatch):
     # Parent Account Head is re-resolved from Master for the NEW (overridden)
     # Account Head - not left at the original payee's stale "SALARY PAYABLE".
     assert txn.rows["LedgerDetails"][0]["Parent Account Head"] == "IMPREST SITE IDW"
+    # A non-blank override Parent Account Head must leave AdjustmentDetails
+    # untouched (still the normal, populated row).
+    assert len(txn.rows["AdjustmentDetails"]) == 1
 
 
 def test_assign_rows_override_parent_account_head_can_be_blank(monkeypatch):
@@ -1365,6 +1368,10 @@ def test_assign_rows_override_parent_account_head_can_be_blank(monkeypatch):
 
     assert txn.rows["LedgerDetails"][0]["Account Head"] == "IMPREST SITE IDW"
     assert txn.rows["LedgerDetails"][0]["Parent Account Head"] == ""
+    # AdjustmentDetails was already built from the pre-override (non-blank)
+    # Parent Account Head - once the override re-resolves it to blank, the
+    # stale AdjustmentDetails row must be cleared too, not left stranded.
+    assert txn.rows["AdjustmentDetails"] == []
 
 
 def test_assign_rows_override_parent_account_head_unchanged_when_no_master_match(monkeypatch):

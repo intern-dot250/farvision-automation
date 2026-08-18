@@ -704,7 +704,16 @@ def _assign_rows(transactions: list[TransactionRowSet], settings, run_id: str) -
                 override_company = master_repository.resolve_company(txn.source_sheet)
                 override_master_match = master_repository.find_party(override, company=override_company)
                 if override_master_match is not None:
-                    rows["LedgerDetails"][0]["Parent Account Head"] = override_master_match.get("Parent Account Head", "")
+                    override_parent_head = override_master_match.get("Parent Account Head", "")
+                    rows["LedgerDetails"][0]["Parent Account Head"] = override_parent_head
+                    # AdjustmentDetails was already built (in
+                    # _build_receipt_payment_rows) from the *pre-override*
+                    # Parent Account Head - if the override's own Parent
+                    # Account Head is blank, re-apply the same "no Parent
+                    # Account Head -> no AdjustmentDetails row" rule here too,
+                    # so the two tabs stay consistent with each other.
+                    if not str(override_parent_head or "").strip() and "AdjustmentDetails" in rows:
+                        rows["AdjustmentDetails"] = []
 
             errors = validation.validate_rows(rows)
             if errors:
