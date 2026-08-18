@@ -1905,6 +1905,35 @@ def test_write_transactions_attaches_tax_info_dropdowns_with_correct_start_row()
     assert args[3] == "test-run"
 
 
+def test_write_transactions_survives_count_data_rows_failure():
+    # count_data_rows is a best-effort read for a cosmetic dropdown - a
+    # failure there (e.g. a transient Sheets API quota hiccup) must never
+    # block the real transaction write.
+    txn = _receipt_payment_txn("Contractor", {"Deduction Type": "Tax deducted at source", "Description": "TDS ON CONTRACTORS"})
+    txn.rows = {
+        "ImportTaxInfo": [
+            {"Link Ref Code": 1, "Deduction Type": "Tax deducted at source", "Description": "TDS ON CONTRACTORS"},
+        ]
+    }
+
+    with patch(
+        "app.services.automation_engine.sheets_client.append_records"
+    ) as mock_append, patch(
+        "app.services.automation_engine.sheets_client.count_data_rows",
+        side_effect=RuntimeError("quota exceeded"),
+    ), patch(
+        "app.services.automation_engine.ledger_repository.log_audit"
+    ) as mock_log, patch(
+        "app.services.automation_engine._attach_tax_info_description_dropdowns"
+    ) as mock_attach:
+        _write_transactions([txn], _FakeSettings(), run_id="test-run")  # must not raise
+
+    mock_append.assert_called()  # the real data write still happened
+    mock_attach.assert_not_called()  # dropdown step skipped, not attempted with a bad start row
+    mock_log.assert_called_once()
+    assert mock_log.call_args.args[1] == "error"
+
+
 def test_write_transactions_skips_tax_info_dropdown_step_when_no_import_tax_info_rows():
     txn = _internal_txn("DWARKADHIS PROJECTS PVT LTD")
     txn.rows = {"DepositWithdrawal": [{"Link Ref Code": 1}]}
@@ -1966,6 +1995,24 @@ def test_attach_tax_info_description_dropdowns_computes_row_numbers_from_write_o
         _attach_tax_info_description_dropdowns(rows, start_row=10, settings=_FakeSettings(), run_id="test-run")
 
     mock_add.assert_called_once_with("rp-sheet-id", "ImportTaxInfo", 11, "Description", ["TDS ON SALARY"])
+
+
+def test_attach_tax_info_description_dropdowns_survives_list_tds_descriptions_failure():
+    rows = [{"Link Ref Code": 1, "Deduction Type": "Tax deducted at source", "Description": "X"}]
+
+    with patch(
+        "app.services.automation_engine.master_repository.list_tds_descriptions",
+        side_effect=RuntimeError("quota exceeded"),
+    ), patch(
+        "app.services.automation_engine.sheets_client.add_dropdown_validation"
+    ) as mock_add, patch(
+        "app.services.automation_engine.ledger_repository.log_audit"
+    ) as mock_log:
+        _attach_tax_info_description_dropdowns(rows, start_row=2, settings=_FakeSettings(), run_id="test-run")  # must not raise
+
+    mock_add.assert_not_called()
+    mock_log.assert_called_once()
+    assert mock_log.call_args.args[1] == "error"
 
 
 def test_attach_tax_info_description_dropdowns_no_op_when_master_has_no_tds_descriptions():

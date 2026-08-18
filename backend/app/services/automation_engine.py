@@ -767,12 +767,23 @@ def _write_transactions(transactions: list[TransactionRowSet], settings, run_id:
     # sheet row without a post-hoc search (find_row_number can't be reused
     # here: a Contractor transaction writes 2 ImportTaxInfo rows sharing the
     # same Link Ref Code, so a search-from-bottom-by-Link-Ref-Code would find
-    # the wrong one).
+    # the wrong one). This is a best-effort read for a cosmetic dropdown, not
+    # part of the real data write - a failure here (e.g. a transient Sheets
+    # API hiccup) must never block the actual transaction write, so it's
+    # deliberately outside the try/except below that re-raises on a genuine
+    # write failure.
     import_tax_info_start_row = None
     if "ImportTaxInfo" in rp_batches:
-        import_tax_info_start_row = (
-            sheets_client.count_data_rows(settings.RECEIPT_PAYMENT_SHEET_ID, "ImportTaxInfo") + 2
-        )
+        try:
+            import_tax_info_start_row = (
+                sheets_client.count_data_rows(settings.RECEIPT_PAYMENT_SHEET_ID, "ImportTaxInfo") + 2
+            )
+        except Exception as exc:
+            logger.error(f"[{run_id}] Failed to compute ImportTaxInfo start row - Description dropdowns skipped: {exc}")
+            ledger_repository.log_audit(
+                run_id, "error", "Failed to compute ImportTaxInfo start row - Description dropdowns skipped",
+                {"error": str(exc)},
+            )
 
     try:
         for tab, rows in dw_batches.items():
@@ -952,7 +963,15 @@ def _attach_tax_info_description_dropdowns(
     transient failure is retried once, a final failure is logged loudly, and
     nothing here can fail the run - the data write has already happened.
     """
-    tds_descriptions = master_repository.list_tds_descriptions()
+    try:
+        tds_descriptions = master_repository.list_tds_descriptions()
+    except Exception as exc:
+        logger.error(f"[{run_id}] Failed to load TDS descriptions from Master - Description dropdowns skipped: {exc}")
+        ledger_repository.log_audit(
+            run_id, "error", "Failed to load TDS descriptions from Master - Description dropdowns skipped",
+            {"error": str(exc)},
+        )
+        return
     if not tds_descriptions:
         return
 
