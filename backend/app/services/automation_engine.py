@@ -480,20 +480,40 @@ def _process_rows_stream(bank_rows: list[dict], run_id: str, settings):
     # number at all (e.g. "BOM 905", whose own REFERENCE column is always
     # "N/A") - reference_digits is then always empty, so the check above can
     # never fire and the same file would silently re-import every time.
-    # LedgerDetails already carries both Narration and Debit/Credit Amount on
-    # the same row for both destinations, so this needs no new tab/column.
-    def _no_ref_keys(sheet_id: str, worksheet_name: str) -> set[tuple[str, str]]:
+    # Narration and Debit/Credit Amount live on different tabs (Narration on
+    # ReceiptPayment/DepositWithdrawal, Amount on that destination's own
+    # LedgerDetails - LedgerDetails' own "Narration" header column exists
+    # but is never actually written to), so this is a genuine join by Link
+    # Ref Code rather than a single-tab read. Uses read_all_records(), not
+    # get_columns() - get_columns reads each column as its own independent
+    # range, and gspread silently drops trailing blank cells per range;
+    # since Debit Amount/Credit Amount are mutually exclusive per row,
+    # whichever one happens to be blank on the last written row truncates
+    # that column's list short and collapses the zip() to nothing. Reading
+    # full row records instead keeps every row's fields correctly aligned
+    # regardless of which columns are blank.
+    def _no_ref_keys(sheet_id: str, narration_tab: str, narration_column: str) -> set[tuple[str, str]]:
+        narration_by_ref = {
+            str(record.get("Link Ref Code", "")).strip(): str(record.get(narration_column, "")).strip()
+            for record in sheets_client.read_all_records(sheet_id, narration_tab)
+        }
         keys = set()
-        for narration, debit_amount, credit_amount in sheets_client.get_columns(
-            sheet_id, worksheet_name, ["Narration", "Debit Amount", "Credit Amount"]
-        ):
-            amount = master_repository._digits_only(debit_amount or credit_amount)
-            if narration.strip() and amount:
-                keys.add((narration.strip(), amount))
+        for record in sheets_client.read_all_records(sheet_id, "LedgerDetails"):
+            link_ref = str(record.get("Link Ref Code", "")).strip()
+            narration = narration_by_ref.get(link_ref)
+            if not narration:
+                continue
+            amount = master_repository._digits_only(
+                str(record.get("Debit Amount", "")) or str(record.get("Credit Amount", ""))
+            )
+            if amount:
+                keys.add((narration, amount))
         return keys
 
-    rp_no_ref_keys = _no_ref_keys(settings.RECEIPT_PAYMENT_SHEET_ID, "LedgerDetails")
-    dw_no_ref_keys = _no_ref_keys(settings.DEPOSIT_WITHDRAWAL_SHEET_ID, "LedgerDetails")
+    rp_no_ref_keys = _no_ref_keys(settings.RECEIPT_PAYMENT_SHEET_ID, "ReceiptPayment", "Narration")
+    dw_no_ref_keys = _no_ref_keys(
+        settings.DEPOSIT_WITHDRAWAL_SHEET_ID, "DepositWithdrawal", "DepositWithdrawal Narration"
+    )
 
     # {normalized payee: Counter((Account Head, Parent Account Head))} built
     # once per run from every head already written for a payee in

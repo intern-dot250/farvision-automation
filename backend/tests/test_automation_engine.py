@@ -30,8 +30,11 @@ def _default_account_head_history_index(monkeypatch):
     existing tests (which don't care about history-based disambiguation)
     don't each need their own Sheets mock for it - a test that does care can
     still patch sheets_client.get_columns itself, which overrides this
-    default for just that test."""
+    default for just that test. Also defaults sheets_client.read_all_records
+    to empty - used the same way by the no-reference duplicate-detection
+    fallback's (Narration, Amount) join."""
     monkeypatch.setattr("app.services.automation_engine.sheets_client.get_columns", lambda *a, **k: [])
+    monkeypatch.setattr("app.services.automation_engine.sheets_client.read_all_records", lambda *a, **k: [])
 
 
 def test_format_amount_returns_real_int():
@@ -633,15 +636,17 @@ def test_no_reference_duplicate_is_detected_via_narration_and_amount():
         }
     ]
 
-    def fake_get_columns(sheet_id, worksheet_name, columns):
-        if worksheet_name == "LedgerDetails" and columns == ["Narration", "Debit Amount", "Credit Amount"]:
-            return [(narration, "5,000", "")]
+    def fake_read_all_records(sheet_id, worksheet_name):
+        if worksheet_name == "ReceiptPayment":
+            return [{"Link Ref Code": "1", "Narration": narration}]
+        if worksheet_name == "LedgerDetails":
+            return [{"Link Ref Code": "1", "Debit Amount": "5,000", "Credit Amount": ""}]
         return []
 
     with patch(
         "app.services.automation_engine.sheets_client.get_column_values", return_value=set()
     ), patch(
-        "app.services.automation_engine.sheets_client.get_columns", side_effect=fake_get_columns
+        "app.services.automation_engine.sheets_client.read_all_records", side_effect=fake_read_all_records
     ), patch(
         "app.services.automation_engine.classifier.master_repository.find_party_candidates",
         return_value=[{"Account Head": "Bank Charges", "Parent Account Head": "BANK CHARGES"}],
@@ -671,15 +676,17 @@ def test_no_reference_transaction_not_duplicate_when_amount_differs():
         }
     ]
 
-    def fake_get_columns(sheet_id, worksheet_name, columns):
-        if worksheet_name == "LedgerDetails" and columns == ["Narration", "Debit Amount", "Credit Amount"]:
-            return [(narration, "5,000", "")]
+    def fake_read_all_records(sheet_id, worksheet_name):
+        if worksheet_name == "ReceiptPayment":
+            return [{"Link Ref Code": "1", "Narration": narration}]
+        if worksheet_name == "LedgerDetails":
+            return [{"Link Ref Code": "1", "Debit Amount": "5,000", "Credit Amount": ""}]
         return []
 
     with patch(
         "app.services.automation_engine.sheets_client.get_column_values", return_value=set()
     ), patch(
-        "app.services.automation_engine.sheets_client.get_columns", side_effect=fake_get_columns
+        "app.services.automation_engine.sheets_client.read_all_records", side_effect=fake_read_all_records
     ), patch(
         "app.services.automation_engine.classifier.master_repository.find_party_candidates",
         return_value=[{"Account Head": "Bank Charges", "Parent Account Head": "BANK CHARGES"}],
@@ -705,15 +712,17 @@ def test_no_reference_transaction_not_duplicate_when_narration_differs():
         }
     ]
 
-    def fake_get_columns(sheet_id, worksheet_name, columns):
-        if worksheet_name == "LedgerDetails" and columns == ["Narration", "Debit Amount", "Credit Amount"]:
-            return [("A completely different narration text", "5,000", "")]
+    def fake_read_all_records(sheet_id, worksheet_name):
+        if worksheet_name == "ReceiptPayment":
+            return [{"Link Ref Code": "1", "Narration": "A completely different narration text"}]
+        if worksheet_name == "LedgerDetails":
+            return [{"Link Ref Code": "1", "Debit Amount": "5,000", "Credit Amount": ""}]
         return []
 
     with patch(
         "app.services.automation_engine.sheets_client.get_column_values", return_value=set()
     ), patch(
-        "app.services.automation_engine.sheets_client.get_columns", side_effect=fake_get_columns
+        "app.services.automation_engine.sheets_client.read_all_records", side_effect=fake_read_all_records
     ), patch(
         "app.services.automation_engine.classifier.master_repository.find_party_candidates",
         return_value=[{"Account Head": "Bank Charges", "Parent Account Head": "BANK CHARGES"}],
@@ -745,19 +754,21 @@ def test_reference_bearing_transaction_still_uses_reference_check_not_no_ref_fal
     def fake_get_column_values(sheet_id, worksheet_name, column):
         return set()  # not present in Narration - genuinely new
 
-    def fake_get_columns(sheet_id, worksheet_name, columns):
-        if worksheet_name == "LedgerDetails" and columns == ["Narration", "Debit Amount", "Credit Amount"]:
-            # Deliberately unrelated data - if the fallback were wrongly
-            # consulted for a reference-bearing row, this would not matter
-            # since it must never be reached in the first place.
-            return [(narration, "1,000", "")]
+    def fake_read_all_records(sheet_id, worksheet_name):
+        # Deliberately matching data - if the fallback were wrongly
+        # consulted for a reference-bearing row, this would not matter
+        # since it must never be reached in the first place.
+        if worksheet_name == "ReceiptPayment":
+            return [{"Link Ref Code": "1", "Narration": narration}]
+        if worksheet_name == "LedgerDetails":
+            return [{"Link Ref Code": "1", "Debit Amount": "1,000", "Credit Amount": ""}]
         return []
 
     with patch(
         "app.services.automation_engine.sheets_client.get_column_values",
         side_effect=fake_get_column_values,
     ), patch(
-        "app.services.automation_engine.sheets_client.get_columns", side_effect=fake_get_columns
+        "app.services.automation_engine.sheets_client.read_all_records", side_effect=fake_read_all_records
     ), patch(
         "app.services.automation_engine.classifier.master_repository.find_party_candidates",
         return_value=[{"Account Head": "Rakiba BIBI", "Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS"}],
@@ -2264,7 +2275,9 @@ def test_process_rows_builds_and_threads_history_index():
     ]
 
     def fake_get_columns(sheet_id, worksheet_name, columns):
-        return [("Rajesh Kumar", "RAJESH KUMAR", "SUNDRY CREDITORS - OTHER")]
+        if columns == ["Payee Name", "Account Head", "Parent Account Head"]:
+            return [("Rajesh Kumar", "RAJESH KUMAR", "SUNDRY CREDITORS - OTHER")]
+        return []
 
     with patch(
         "app.services.automation_engine.sheets_client.get_column_values", return_value=set()
