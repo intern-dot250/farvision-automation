@@ -501,14 +501,44 @@ def test_clear_all_tabs_also_clears_data_validation(monkeypatch):
 
     mock_spreadsheet.batch_update.assert_called_once()
     requests = mock_spreadsheet.batch_update.call_args.args[0]["requests"]
-    assert len(requests) == 2
-    for request, sheet_id, col_count in zip(requests, (111, 222), (9, 31)):
+    validation_requests = [r for r in requests if "setDataValidation" in r]
+    assert len(validation_requests) == 2
+    for request, sheet_id, col_count in zip(validation_requests, (111, 222), (9, 31)):
         validation_range = request["setDataValidation"]["range"]
         assert validation_range["sheetId"] == sheet_id
         assert validation_range["startRowIndex"] == 1
         assert validation_range["startColumnIndex"] == 0
         assert validation_range["endColumnIndex"] == col_count
         assert "rule" not in request["setDataValidation"]
+
+
+def test_clear_all_tabs_also_clears_cell_notes(monkeypatch):
+    # A cell note (e.g. the ambiguous-Account-Head verification note) is
+    # separate metadata from both values and validation - values.batchClear
+    # and the setDataValidation clear above don't touch it, so it must be
+    # cleared explicitly or it survives a "Clear Sheet Data" and silently
+    # sits on whatever unrelated transaction a later run writes into that
+    # same row.
+    ws1 = _make_mock_worksheet("ReceiptPayment", col_count=9, sheet_id=111)
+    ws2 = _make_mock_worksheet("LedgerDetails", col_count=31, sheet_id=222)
+    mock_spreadsheet = MagicMock()
+    mock_spreadsheet.worksheets.return_value = [ws1, ws2]
+    monkeypatch.setattr(sheets_client, "open_sheet", lambda sid: mock_spreadsheet)
+
+    sheets_client.clear_all_tabs("sheet1")
+
+    requests = mock_spreadsheet.batch_update.call_args.args[0]["requests"]
+    note_requests = [r for r in requests if "repeatCell" in r]
+    assert len(note_requests) == 2
+    for request, sheet_id, col_count in zip(note_requests, (111, 222), (9, 31)):
+        repeat_cell = request["repeatCell"]
+        assert repeat_cell["fields"] == "note"
+        assert repeat_cell["cell"] == {}
+        note_range = repeat_cell["range"]
+        assert note_range["sheetId"] == sheet_id
+        assert note_range["startRowIndex"] == 1
+        assert note_range["startColumnIndex"] == 0
+        assert note_range["endColumnIndex"] == col_count
 
 
 def test_clear_all_tabs_skips_validation_clear_for_info_only_spreadsheet(monkeypatch):

@@ -352,12 +352,14 @@ def clear_all_tabs(sheet_id: str) -> list[str]:
     """Erase every data row (row 2 downward) from every tab in this
     spreadsheet, except "Info" - header row 1 is never touched on any tab.
 
-    Also clears any data validation (e.g. an Account Head dropdown left over
-    from a previous run's ambiguous transaction) from the same cleared range
-    - values.batchClear only erases cell values, never validation/formatting
-    metadata, so a validation rule left in place would otherwise stay
-    physically pinned to its row and silently misapply to whatever
-    unrelated transaction a later run happens to write into that same row.
+    Also clears any data validation (e.g. an Account Head dropdown) and any
+    cell notes (e.g. the "multiple Master entries..." note attached
+    alongside that dropdown) left over from a previous run's ambiguous
+    transaction, from the same cleared range - values.batchClear only erases
+    cell values, never validation/note/formatting metadata, so either one
+    left in place would otherwise stay physically pinned to its row and
+    silently misapply to whatever unrelated transaction a later run happens
+    to write into that same row.
 
     Tabs are discovered dynamically from the live spreadsheet rather than a
     hardcoded list, so this stays correct even if tabs are added later.
@@ -365,23 +367,23 @@ def clear_all_tabs(sheet_id: str) -> list[str]:
     """
     spreadsheet = open_sheet(sheet_id)
     cleared: list[str] = []
-    validation_requests = []
+    metadata_requests = []
     for worksheet in spreadsheet.worksheets():
         if worksheet.title in _CLEAR_EXCLUDED_WORKSHEETS:
             continue
         last_col_letter = _column_letter(max(worksheet.col_count, 1))
         worksheet.batch_clear([f"A2:{last_col_letter}"])
-        validation_requests.append({
-            "setDataValidation": {
-                "range": {
-                    "sheetId": worksheet.id,
-                    "startRowIndex": 1,
-                    "startColumnIndex": 0,
-                    "endColumnIndex": max(worksheet.col_count, 1),
-                }
-            }
+        cleared_range = {
+            "sheetId": worksheet.id,
+            "startRowIndex": 1,
+            "startColumnIndex": 0,
+            "endColumnIndex": max(worksheet.col_count, 1),
+        }
+        metadata_requests.append({"setDataValidation": {"range": cleared_range}})
+        metadata_requests.append({
+            "repeatCell": {"range": cleared_range, "cell": {}, "fields": "note"}
         })
         cleared.append(worksheet.title)
-    if validation_requests:
-        spreadsheet.batch_update({"requests": validation_requests})
+    if metadata_requests:
+        spreadsheet.batch_update({"requests": metadata_requests})
     return cleared
