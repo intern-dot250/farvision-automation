@@ -1093,11 +1093,35 @@ def run_automation_stream(dry_run: bool = True, rows: list[dict] | None = None):
     Yields dicts shaped either:
       {"type": "progress", "stage": "classifying"|"writing", "processed": int, "total": int}
       {"type": "result", "result": RunResult}
-    The "result" event is always the last one yielded.
+      {"type": "error", "message": str}
+    The "result" or "error" event is always the last one yielded - the
+    caller (the streaming API route) can therefore always end the response
+    on a well-formed terminal event. Everything from here to the final
+    yield is wrapped in one try/except for exactly that reason: an
+    uncaught exception anywhere in this pipeline (not just the post-write
+    cosmetic steps, which already guard themselves individually) would
+    otherwise propagate out of this generator, which Starlette's
+    StreamingResponse turns into an abruptly-closed connection - the
+    frontend then has no final event to read and reports a generic
+    "Upload stream ended without a result", with no indication of what
+    actually failed. This is the structural backstop underneath all the
+    individual per-step guards elsewhere in this file: no matter what
+    breaks, or where, the run always ends with one clear, real message.
     """
     run_id = str(uuid.uuid4())
     settings = get_settings()
 
+    try:
+        yield from _run_automation_stream_body(dry_run, rows, run_id, settings)
+    except Exception as exc:
+        logger.error(f"[{run_id}] Automation run failed unexpectedly: {exc}")
+        ledger_repository.log_audit(
+            run_id, "error", "Automation run failed unexpectedly", {"error": str(exc)}
+        )
+        yield {"type": "error", "message": str(exc)}
+
+
+def _run_automation_stream_body(dry_run: bool, rows: list[dict] | None, run_id: str, settings):
     bank_rows = rows if rows is not None else _read_bank_rows_from_sheet()
     total = len(bank_rows)
     sheet_names = _distinct_sheet_names(bank_rows)

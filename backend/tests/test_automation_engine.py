@@ -2351,6 +2351,28 @@ def test_run_automation_stream_survives_attach_ambiguous_dropdowns_failure():
     assert any(call.args[1] == "error" for call in mock_log.call_args_list)
 
 
+def test_run_automation_stream_yields_error_event_on_unexpected_failure():
+    # The structural backstop: an exception ANYWHERE in the pipeline (not
+    # just the individually-guarded post-write cosmetic steps) must still
+    # end the stream on a well-formed terminal event, never propagate out
+    # and abruptly close the connection.
+    from app.services import automation_engine as engine_module
+
+    bank_rows = [{"SL#": "1", "REFERENCE": "REF-1", "DESCRIPTION": "x", "TXN DATE": "22-Jul-2026", "DEBITS": "1000", "CREDITS": "", "BUSINESS UNIT": "Casa Romana"}]
+
+    with patch(
+        "app.services.automation_engine.master_repository.clear_cache",
+        side_effect=RuntimeError("quota exceeded"),
+    ), patch(
+        "app.services.automation_engine.ledger_repository.log_audit"
+    ) as mock_log:
+        events = list(engine_module.run_automation_stream(dry_run=True, rows=bank_rows))  # must not raise
+
+    assert events[-1]["type"] == "error"
+    assert "quota exceeded" in events[-1]["message"]
+    assert any(call.args[1] == "error" for call in mock_log.call_args_list)
+
+
 def test_run_automation_stream_clears_master_cache_before_processing():
     # A long-lived warm serverless instance must never keep serving a stale
     # in-memory Master snapshot across runs - each run has to force a fresh

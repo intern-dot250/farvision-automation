@@ -153,6 +153,11 @@ export async function runAutomationUploadStream(
         onProgress({ stage: event.stage, processed: event.processed, total: event.total });
       } else if (event.type === "result") {
         finalResult = event as RunResponse;
+      } else if (event.type === "error") {
+        // The backend always yields this as its terminal event when the run
+        // fails for any reason - surface the real message rather than
+        // falling through to the generic "stream ended without a result".
+        throw new ApiError(500, event.message || "Automation run failed");
       }
     }
   }
@@ -161,6 +166,8 @@ export async function runAutomationUploadStream(
     const event = JSON.parse(buffer);
     if (event.type === "result") {
       finalResult = event as RunResponse;
+    } else if (event.type === "error") {
+      throw new ApiError(500, event.message || "Automation run failed");
     }
   }
 
