@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Combobox } from "@/components/ui/combobox";
 import {
   createOverrideRule,
   deleteOverrideRule,
@@ -177,21 +178,13 @@ export default function OverrideRulesPage() {
                 <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
                   Head
                 </label>
-                <select
-                  required
+                <Combobox
+                  options={headOptions}
                   value={form.head}
-                  onChange={(e) => setForm({ ...form, head: e.target.value })}
-                  className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
-                >
-                  <option value="" disabled>
-                    Select a Head
-                  </option>
-                  {headOptions.map((head) => (
-                    <option key={head} value={head}>
-                      {head}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(head) => setForm({ ...form, head })}
+                  placeholder="Select a Head"
+                  required
+                />
               </div>
 
               <div>
@@ -211,21 +204,13 @@ export default function OverrideRulesPage() {
                 <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
                   Account Head
                 </label>
-                <select
-                  required
+                <Combobox
+                  options={accountHeadOptions}
                   value={form.account_head}
-                  onChange={(e) => setForm({ ...form, account_head: e.target.value })}
-                  className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
-                >
-                  <option value="" disabled>
-                    Select an Account Head
-                  </option>
-                  {accountHeadOptions.map((accountHead) => (
-                    <option key={accountHead} value={accountHead}>
-                      {accountHead}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(account_head) => setForm({ ...form, account_head })}
+                  placeholder="Select an Account Head"
+                  required
+                />
               </div>
             </div>
 
