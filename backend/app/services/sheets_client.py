@@ -1,11 +1,47 @@
+import time
 from functools import lru_cache
 from pathlib import Path
 
 import gspread
 from google.oauth2.service_account import Credentials
+from gspread.http_client import HTTPClient
 from gspread.utils import ValidationConditionType
 
 from app.core.config import get_settings
+from app.core.logger import logger
+
+# Google's Sheets API read quota is per-minute-per-user - a single
+# automation run can genuinely burst past it (duplicate-detection reads,
+# history-index reads, dropdown/note attachment, all within the same
+# request), and it's shared across every concurrent user of this project,
+# so a burst of manual testing elsewhere can also exhaust it. Retrying with
+# backoff, patched once at this single choke point that every gspread
+# operation funnels through (Worksheet/Spreadsheet methods all end up
+# calling HTTPClient.request), means a transient 429 self-heals within the
+# same run instead of failing the whole automation with no easy way to
+# recover except waiting and re-uploading by hand.
+_RETRYABLE_STATUS_CODES = {429}
+_MAX_ATTEMPTS = 4
+_original_http_client_request = HTTPClient.request
+
+
+def _request_with_retry(self, method, endpoint, *args, **kwargs):
+    for attempt in range(1, _MAX_ATTEMPTS + 1):
+        try:
+            return _original_http_client_request(self, method, endpoint, *args, **kwargs)
+        except gspread.exceptions.APIError as exc:
+            status = exc.response.status_code if exc.response is not None else None
+            if status not in _RETRYABLE_STATUS_CODES or attempt == _MAX_ATTEMPTS:
+                raise
+            wait_seconds = 15 * attempt
+            logger.warning(
+                f"Sheets API rate limit hit ({method} {endpoint}) - "
+                f"retrying in {wait_seconds}s (attempt {attempt}/{_MAX_ATTEMPTS})"
+            )
+            time.sleep(wait_seconds)
+
+
+HTTPClient.request = _request_with_retry
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",

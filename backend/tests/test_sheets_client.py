@@ -1,9 +1,62 @@
 """Tests for sheets_client.append_records value coercion."""
 
 import json
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+
+import gspread
+import pytest
 
 from app.services import sheets_client
+
+
+def _api_error(status_code):
+    response = MagicMock()
+    response.status_code = status_code
+    response.json.return_value = {"error": {"code": status_code, "message": "boom"}}
+    return gspread.exceptions.APIError(response)
+
+
+def test_request_with_retry_retries_on_429_then_succeeds(monkeypatch):
+    monkeypatch.setattr(sheets_client.time, "sleep", lambda seconds: None)
+    calls = {"count": 0}
+
+    def fake_original(self, method, endpoint, *args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] < 3:
+            raise _api_error(429)
+        return "ok"
+
+    monkeypatch.setattr(sheets_client, "_original_http_client_request", fake_original)
+
+    result = sheets_client._request_with_retry(MagicMock(), "get", "https://example.com")
+
+    assert result == "ok"
+    assert calls["count"] == 3
+
+
+def test_request_with_retry_gives_up_after_max_attempts(monkeypatch):
+    monkeypatch.setattr(sheets_client.time, "sleep", lambda seconds: None)
+
+    def always_429(self, method, endpoint, *args, **kwargs):
+        raise _api_error(429)
+
+    monkeypatch.setattr(sheets_client, "_original_http_client_request", always_429)
+
+    with pytest.raises(gspread.exceptions.APIError):
+        sheets_client._request_with_retry(MagicMock(), "get", "https://example.com")
+
+
+def test_request_with_retry_never_retries_non_429_errors(monkeypatch):
+    with patch.object(sheets_client, "time") as mock_time:
+        def not_found(self, method, endpoint, *args, **kwargs):
+            raise _api_error(404)
+
+        monkeypatch.setattr(sheets_client, "_original_http_client_request", not_found)
+
+        with pytest.raises(gspread.exceptions.APIError):
+            sheets_client._request_with_retry(MagicMock(), "get", "https://example.com")
+
+    mock_time.sleep.assert_not_called()
 
 
 def _make_mock_ws():
