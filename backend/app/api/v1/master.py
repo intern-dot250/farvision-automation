@@ -2,31 +2,46 @@ from fastapi import APIRouter
 
 from app.core.constants import Tags
 from app.schemas.override_rules import AccountHeadOptionsResponse, HeadOptionsResponse
-from app.services import classifier, master_repository
+from app.services import master_repository
 
 router = APIRouter(prefix="/master", tags=[Tags.SHEETS])
 
-# Heads like "Vendor"/"Contractor"/"Imprest"/"Collection"/"Bank Charges" come
-# from the uploaded bank statement's own HEAD column (see classifier.py -
-# a trusted existing_head is used as-is, never derived from Master) and are
-# never actually present in Master's Parent Account Head text, so they can't
-# be discovered by scanning Master alone. Union them with whatever Master
-# does yield (via the same _derive_head Master falls back to when there's no
-# trusted head) so the dropdown covers both real-world sources.
-_KNOWN_HEADS = {"Internal", "Vendor", "Contractor", "Collection", "Imprest", "Bank Charges", "Unclassified"}
+# Deriving this list from Master (via classifier._derive_head, which falls
+# back to a row's raw Account Head whenever Parent Account Head is blank)
+# let bank-account entries and other ledger-specific noise leak into what's
+# supposed to be a short, clean category list - confirmed live, e.g. "PNB
+# CURRENT A/C - (...)" showing up as a selectable "Head". Replaced with the
+# fixed, accounts-team-provided list below so the dropdown is guaranteed
+# correct regardless of Master's data shape.
+_HEAD_OPTIONS = {
+    "AAKRITI", "ADISH JAIN", "AHRWA", "AMAN & CO", "AMBITION", "BANK CHARGES",
+    "BONUS", "BOOKING", "BOUNCE", "BOUNCE RECOVER", "CANCELLATION", "CARD",
+    "CASA DEV", "COLLECTION", "DIRECTOR REM", "EMI", "EXOTIC", "FDR",
+    "FEES RATE & TAXES", "INTEREST", "INTERNAL", "LEGAL & PROFF.", "LOAN",
+    "LOAN RECOVERY", "MBPL", "MEPL", "MISC", "NAVTECH", "OBOC", "OTHER COS",
+    "PANDA", "PLP", "PROFESSIONAL", "RADHE", "RENTAL", "RTB", "SALARY",
+    "SELF", "SKG BUILDCON", "TAX", "VENDOR", "STAMP PAPER", "VIEVEK SIR",
+    "A.RENTAL", "EPF/ESI", "MLPL", "DPL", "VAT REFUND", "FULL & FINAL",
+    "CAR 24", "RERA", "DD", "REIMBURSEMENT", "AUDIT FEE", "AXIS EMI",
+    "SBI EMI", "ARRER SALARY", "CONTRACTOR", "COLABREATION  SEC-23",
+    "REFUND", "PANTRY MATERIAL", "VECH.SALE", "IMPREST",
+    "SHOP RENT RECEIVED", "INSURANCE", "WAGES", "LEI", "INVESTMENT",
+    "MKT/ADVER", "EXOTIC BUILDWELL", "REPAIR & MAINT", "M TECH",
+    "COMMISSION", "BG RENEWAL", "TENDER FEE", "DHBVN", "SUSPENSE",
+    "OFFICE RENT", "IDW TO FREE LOAN", "FREE TO IDW LOAN", "SALARY-HO",
+    "SALARY-SITE", "VENDOR - HO", "VENDOR -SITE", "REFUNDABLE SECURITY",
+    "FOREIGN TRAVELLING EXP", "OFFICE EQUIPMENT", "ROC FEES",
+    "PROFESSIONAL INCOME", "FREIGHT EXPENSES", "SALE", "STIPEND",
+}
 
 
 @router.get(
     "/heads",
     response_model=HeadOptionsResponse,
-    summary="Distinct Head values derivable from Master, for dropdown population",
+    summary="Fixed list of valid Head values, for dropdown population",
 )
 def get_head_options() -> HeadOptionsResponse:
-    df = master_repository._load_master_df()
-    heads = set(_KNOWN_HEADS)
-    for _, row in df.iterrows():
-        heads.add(classifier._derive_head(row.to_dict()))
-    return HeadOptionsResponse(heads=sorted(h for h in heads if h))
+    return HeadOptionsResponse(heads=sorted(_HEAD_OPTIONS))
 
 
 @router.get(

@@ -7,11 +7,14 @@ from app.services import master_repository
 client = TestClient(app)
 
 
-def test_get_head_options_derives_from_master(monkeypatch):
+def test_get_head_options_returns_fixed_list_regardless_of_master(monkeypatch):
+    # Deriving this list from Master used to leak raw Account Head noise
+    # (e.g. bank account entries) into the dropdown whenever a row's Parent
+    # Account Head was blank - now it's a fixed, accounts-team-provided
+    # list, so Master's content must have zero effect on the response.
     df = pd.DataFrame.from_records(
         [
-            {"Account Head": "Mukesh Kumar", "Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS"},
-            {"Account Head": "Goel Electricals", "Parent Account Head": "SUNDRY CREDITORS - OTHER"},
+            {"Account Head": "PNB CURRENT A/C - (4184002100014005)", "Parent Account Head": ""},
         ]
     )
     monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
@@ -20,18 +23,13 @@ def test_get_head_options_derives_from_master(monkeypatch):
 
     assert response.status_code == 200
     heads = response.json()["heads"]
-    assert "Contractor" in heads
-    assert "SUNDRY CREDITORS - OTHER" in heads
-    assert "Internal" in heads
-    # "Imprest"/"Vendor"/"Collection"/"Bank Charges" come from the bank
-    # statement's own HEAD column, not from Master's Parent Account Head
-    # text, so they'd never appear from scanning Master alone (confirmed via
-    # live testing - Master genuinely has no "Imprest" Parent Account Head
-    # anywhere) - the known-heads baseline must still surface them.
-    assert "Imprest" in heads
-    assert "Vendor" in heads
-    assert "Collection" in heads
-    assert "Bank Charges" in heads
+    assert "PNB CURRENT A/C - (4184002100014005)" not in heads
+    assert "Imprest" not in heads  # fixed list uses the accounts-team casing
+    assert "IMPREST" in heads
+    assert "CONTRACTOR" in heads
+    assert "COLLECTION" in heads
+    assert "BANK CHARGES" in heads
+    assert heads == sorted(heads)
 
 
 def test_get_account_head_options_returns_distinct_values(monkeypatch):
