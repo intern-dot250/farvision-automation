@@ -253,14 +253,18 @@ def _receipt_payment_txn(head: str, matched_master_row: dict | None) -> Transact
     )
 
 
-def test_ledger_details_parent_account_head_falls_back_to_trusted_head():
-    # An unmatched Vendor/Contractor payee must still pass LedgerDetails'
-    # required-field validation (Parent Account Head) so _assign_rows doesn't
-    # wrongly reroute it to "review" just because Master has no entry for it.
+def test_ledger_details_parent_account_head_stays_blank_when_no_master_match():
+    # An unmatched Vendor/Contractor payee must NOT get the generic head
+    # ("Vendor"/"Contractor") fabricated into Parent Account Head - that
+    # literal string previously leaked into real LedgerDetails rows this
+    # way. Parent Account Head is not a required field (validation.py), so
+    # staying blank here is correct, not a validation failure - unlike
+    # Account Head, which IS required and legitimately falls back below.
     txn = _receipt_payment_txn("Vendor", {})
     rows = _build_receipt_payment_rows(txn, link_ref_code=4)
 
-    assert rows["LedgerDetails"][0]["Parent Account Head"] == "Vendor"
+    assert rows["LedgerDetails"][0]["Parent Account Head"] == ""
+    assert rows["LedgerDetails"][0]["Account Head"] == "Some Party"
 
 
 def test_receipt_payment_ledger_details_payment_mode_is_direct():
@@ -279,17 +283,46 @@ def test_deposit_withdrawal_ledger_details_payment_mode_is_direct():
 
 def test_ledger_details_account_head_and_payee_name_fall_back_to_head_when_no_payee_name():
     # "POS GST"-style narrations (Bank Charges, etc.) have no extractable
-    # payee name and no Master match - Account Head/Payee Name must still
-    # fall back to the trusted head so LedgerDetails' required fields never
-    # end up blank and silently reroute the row to review.
+    # payee name and no Master match - Account Head/Payee Name (both
+    # required fields) must still fall back to the trusted head so
+    # LedgerDetails' required fields never end up blank and silently
+    # reroute the row to review. Parent Account Head is NOT required and
+    # must stay blank rather than also fabricating the generic head into it
+    # - that was the bug ("Vendor"/"Contractor" leaking into Parent Account
+    # Head whenever nothing matched in Master).
     txn = _receipt_payment_txn("Bank Charges", {})
     txn.classification.payee_name = None
     rows = _build_receipt_payment_rows(txn, link_ref_code=5)
 
     ledger = rows["LedgerDetails"][0]
     assert ledger["Account Head"] == "Bank Charges"
-    assert ledger["Parent Account Head"] == "Bank Charges"
+    assert ledger["Parent Account Head"] == ""
     assert ledger["Payee Name"] == "Bank Charges"
+
+
+def test_ledger_details_parent_account_head_always_comes_from_matched_master_row():
+    # Test 1 (spec): a real Master match must always win, never the trusted
+    # head, even when the head string itself would look plausible.
+    txn = _receipt_payment_txn("Vendor", {"Account Head": "MKA DECORATOR", "Parent Account Head": "SUNDRY CREDITORS - OTHER"})
+    rows = _build_receipt_payment_rows(txn, link_ref_code=6)
+
+    ledger = rows["LedgerDetails"][0]
+    assert ledger["Account Head"] == "MKA DECORATOR"
+    assert ledger["Parent Account Head"] == "SUNDRY CREDITORS - OTHER"
+
+
+def test_ledger_details_no_master_match_prefers_payee_name_over_head_for_account_head():
+    # Test 2 (spec): when nothing matched in Master, Account Head must still
+    # prefer the extracted payee name over the generic trusted head - never
+    # collapsing "ABC" down to "Vendor" just because Master has no entry.
+    # Parent Account Head has no such fallback at all - stays blank.
+    txn = _receipt_payment_txn("Vendor", {})
+    txn.classification.payee_name = "ABC"
+    rows = _build_receipt_payment_rows(txn, link_ref_code=7)
+
+    ledger = rows["LedgerDetails"][0]
+    assert ledger["Account Head"] == "ABC"
+    assert ledger["Parent Account Head"] == ""
 
 
 def test_ledger_details_parent_account_head_prefers_master_when_present():

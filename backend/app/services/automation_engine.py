@@ -325,7 +325,16 @@ def _build_receipt_payment_rows(txn: TransactionRowSet, link_ref_code: int) -> d
     bank_name = _resolve_own_bank_name(
         txn.source_sheet, matched, txn.classification.bank_name
     )
-    parent_account_head = matched.get("Parent Account Head") or txn.classification.head
+    # Unlike Account Head (below, required and legitimately falls back to
+    # payee_name/head so a headed transaction never fails validation),
+    # Parent Account Head is NOT a required field (validation.py) - blank is
+    # an established, correctly-handled state elsewhere in this file (the
+    # Override Rule refresh logic already leaves it blank + skips
+    # AdjustmentDetails when Master has none). It must only ever come from a
+    # real matched Master row - falling back to the generic trusted head
+    # here previously let literal "Vendor"/"Contractor" strings leak into
+    # Parent Account Head whenever no Master row matched at all.
+    parent_account_head = matched.get("Parent Account Head") or ""
 
     return {
         "ReceiptPayment": [

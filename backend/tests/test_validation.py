@@ -144,3 +144,79 @@ def test_document_no_is_not_required_despite_sheet_flag():
     }
 
     assert validate_rows(rows) == []
+
+
+def test_parent_account_head_vendor_is_invalid():
+    rows = {
+        "LedgerDetails": [
+            {
+                "Link Ref Code": 5,
+                "Debit/Credit": "Debit",
+                "Account Head": "Sharma Paints",
+                "Parent Account Head": "Vendor",
+                "Payment Mode": "Direct",
+                "Payee Name": "Sharma Paints",
+            }
+        ],
+    }
+
+    errors = validate_rows(rows)
+    assert len(errors) == 1
+    assert "Parent Account Head is invalid" in errors[0]
+
+
+def test_parent_account_head_vendor_is_invalid_case_and_whitespace_insensitive():
+    for value in ("VENDOR", "vendor", " Vendor", "VENDOR "):
+        rows = {
+            "LedgerDetails": [
+                {
+                    "Link Ref Code": 5,
+                    "Debit/Credit": "Debit",
+                    "Account Head": "Sharma Paints",
+                    "Parent Account Head": value,
+                    "Payment Mode": "Direct",
+                    "Payee Name": "Sharma Paints",
+                }
+            ],
+        }
+        errors = validate_rows(rows)
+        assert len(errors) == 1, f"expected an error for {value!r}"
+
+
+def test_parent_account_head_blank_is_still_valid():
+    # Blank is a legitimate state (no Master match, or Master's own Parent
+    # Account Head is blank) - only the literal generic label is invalid.
+    rows = {
+        "LedgerDetails": [
+            {
+                "Link Ref Code": 5,
+                "Debit/Credit": "Debit",
+                "Account Head": "Sharma Paints",
+                "Parent Account Head": "",
+                "Payment Mode": "Direct",
+                "Payee Name": "Sharma Paints",
+            }
+        ],
+    }
+
+    assert validate_rows(rows) == []
+
+
+def test_parent_account_head_real_value_containing_vendor_word_is_not_flagged():
+    # Only an exact match to the generic label is invalid - a real Master
+    # value that happens to contain "vendor" as a substring must not be
+    # wrongly flagged.
+    rows = {
+        "LedgerDetails": [
+            {
+                "Link Ref Code": 5,
+                "Debit/Credit": "Debit",
+                "Account Head": "Sharma Paints",
+                "Parent Account Head": "SUNDRY CREDITORS - VENDOR PAYMENTS",
+                "Payment Mode": "Direct",
+                "Payee Name": "Sharma Paints",
+            }
+        ],
+    }
+
+    assert validate_rows(rows) == []
