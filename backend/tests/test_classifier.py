@@ -212,6 +212,75 @@ def test_plain_name_description_with_no_master_match_routes_to_unclassified():
     assert result.head == "Unclassified"
 
 
+def test_positional_fallback_recovers_payee_via_slash_segment():
+    # Same heuristic as automation_engine._compute_narration_from_formula:
+    # 5th "/"-segment. A structured NEFT-prefixed description with no IFSC
+    # anywhere makes both parsed.payee_name and _extract_fallback_payee
+    # return None (the real production failure mode), so this is the tier
+    # that must recover the real name.
+    result = classify_transaction(
+        "NEFT/DR/UTR/AAAA/AWES OME PAINT PLANNERS PVT LTD/Ref"
+    )
+
+    assert result.payee_name == "AWES OME PAINT PLANNERS PVT LTD"
+
+
+def test_positional_fallback_recovers_payee_via_dash_segment():
+    # 4th "-"-segment (index 3) - mirrors the real production case where
+    # this description shape previously produced no payee at all.
+    result = classify_transaction("NEFT-DR-UTR123-Mukesh Kumar-END")
+
+    assert result.payee_name == "Mukesh Kumar"
+
+
+def test_positional_fallback_rejects_generic_label():
+    # The recovered segment is just a generic Head-style word, not a real
+    # name - source data genuinely has nothing recoverable, so this must
+    # stay None (routes to Unclassified), never fabricate a fake payee.
+    with patch("app.services.classifier.master_repository.find_party_candidates", return_value=[]):
+        result = classify_transaction("NEFT/DR/UTR/AAAA/vendor/Ref")
+
+    assert result.payee_name is None
+    assert result.head == "Unclassified"
+
+
+def test_positional_fallback_never_overrides_an_already_found_payee():
+    # A description that already resolves via parse_description (plain IMPS
+    # second-segment) must be completely unaffected by the new tier, even
+    # though its own slash-segment count would also satisfy the positional
+    # fallback's shape.
+    result = classify_transaction(
+        "IMPS/Jayant Raitani/XXX8180/RRN:618614869331/PC123/Extra"
+    )
+
+    assert result.payee_name == "Jayant Raitani"
+
+
+def test_positional_fallback_wins_over_bank_name_when_a_real_name_is_recoverable():
+    # Reproduces the real production bug: parsed.payee_name is None (NA
+    # placeholder), and parsed.bank_name's own search picks the first
+    # multi-word token ("BANK OF MAHARAS") - the weak fallback that
+    # previously won by default. A real name ("Bharat Singh") is recoverable
+    # from the same description via the positional split, and that must now
+    # be preferred over the weaker bank-name fallback.
+    result = classify_transaction(
+        "IMPS/NA/BANK OF MAHARAS/RRN:123/Bharat Singh/D"
+    )
+
+    assert result.payee_name == "Bharat Singh"
+
+
+def test_positional_fallback_still_falls_back_to_bank_name_when_nothing_recoverable():
+    # Unchanged existing behavior: when even the positional split can't find
+    # a real name (5th segment is itself a reference code), still falls
+    # through to the bank name, same as before this fix.
+    result = classify_transaction(
+        "IMPS/NAXXXQ675/XXXX0091/RRN:61874887784/PC04585698164489/BANK OF MAHARAS/D"
+    )
+
+    assert result.payee_name == "BANK OF MAHARAS"
+
+
 # --- Company resolution (Master mixes DPL/AMB) ---
 
 

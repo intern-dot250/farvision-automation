@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import re
 
 from app.services import account_head_resolver, master_repository
-from app.services.description_parser import parse_description
+from app.services.description_parser import IFSC_PATTERN, parse_description
 
 
 @dataclass
@@ -91,6 +91,51 @@ def _extract_fallback_payee(description: str) -> str | None:
     return clean or None
 
 
+_GENERIC_PAYEE_LABELS = {
+    "CONTRACTOR", "VENDOR", "BANK CHARGES", "INTERNAL", "RECEIPT", "COLLECTION", "IMPREST",
+}
+
+
+def _positional_fallback_payee(description: str) -> str | None:
+    """Last-resort extraction reusing the exact heuristic already proven in
+    automation_engine._compute_narration_from_formula (5th "/"-segment, else
+    4th "-"-segment) - both functions run on the same raw DESCRIPTION for
+    the same row (confirmed: automation_engine._process_rows_stream passes
+    row["DESCRIPTION"] to both), and this positional split has recovered
+    real payee names, confirmed against live production data, that the
+    IFSC-anchored parsing above (parse_description/_extract_fallback_payee)
+    missed entirely - e.g. falling back to the counterparty bank name or the
+    generic Head label instead of the real beneficiary.
+
+    Unlike the narration-formula version, never falls back to the whole raw
+    description as a "candidate" (fine for cosmetic display text, not a
+    safe Master-lookup key) and rejects a result that's just a generic
+    label (e.g. "vendor") rather than a real name - those cases genuinely
+    have no recoverable payee in the source data.
+    """
+    desc = description.strip()
+    if not desc:
+        return None
+    slash_parts = desc.split("/")
+    dash_parts = desc.split("-")
+    if len(slash_parts) >= 6:
+        candidate = slash_parts[4].strip()
+    elif len(dash_parts) >= 5:
+        candidate = dash_parts[3].strip()
+    else:
+        return None
+    if not candidate or candidate.upper() in _GENERIC_PAYEE_LABELS:
+        return None
+    # Same reference/tracking-code exclusions description_parser.py's own
+    # bank-name search already applies (RRN:/PC-prefixed tokens, IFSC codes,
+    # bare digit strings) - without this, a slash-delimited narration whose
+    # 5th segment happens to be a reference number (not the payee) would
+    # return that code instead of correctly falling through to bank_name.
+    if candidate.isdigit() or IFSC_PATTERN.match(candidate) or candidate.upper().startswith(("RRN", "PC")):
+        return None
+    return candidate
+
+
 def classify_transaction(
     description: str,
     existing_head: str | None = None,
@@ -122,7 +167,19 @@ def classify_transaction(
     instead of auto-resolved.
     """
     parsed = parse_description(description, is_credit=is_credit)
-    payee_name = parsed.payee_name or parsed.bank_name or _extract_fallback_payee(description)
+    # parsed.bank_name is a weak last resort (see description_parser.py's
+    # own docstring) - the positional fallback below has recovered a real
+    # beneficiary name in live production cases where parsed.payee_name and
+    # _extract_fallback_payee both found nothing and the code used to fall
+    # straight to the bank name instead. Consulted only when both of those
+    # already came up empty, so a row that already resolves correctly today
+    # is completely unaffected.
+    payee_name = (
+        parsed.payee_name
+        or _extract_fallback_payee(description)
+        or _positional_fallback_payee(description)
+        or parsed.bank_name
+    )
     trusted_head = existing_head.strip() if existing_head else ""
     company = master_repository.resolve_company(source_sheet, parsed.bank_name)
 
