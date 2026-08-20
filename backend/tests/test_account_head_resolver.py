@@ -221,6 +221,87 @@ def test_no_candidates_returns_no_match_not_ambiguous():
     assert result.reason == "no_match"
 
 
+def test_narration_wins_over_conflicting_historical_majority():
+    # History strongly favors "SUNDRY CREDITORS - OTHER" (9 vs 1), but this
+    # transaction's own narration clearly points at the other candidate -
+    # narration must win, since history is only supporting evidence and must
+    # never override what the current transaction's own text says (avoids
+    # reinforcing a past misclassification on every future transaction).
+    candidates = [
+        _row("RAJESH KUMAR", "SUNDRY CREDITORS - OTHER"),
+        _row("RAJESH KUMAR", "ADVANCE FROM CUSTOMER (INVESTOR)"),
+    ]
+    history = {
+        "RAJESH KUMAR": Counter({
+            ("RAJESH KUMAR", "SUNDRY CREDITORS - OTHER"): 9,
+            ("RAJESH KUMAR", "ADVANCE FROM CUSTOMER (INVESTOR)"): 1,
+        })
+    }
+    result = account_head_resolver.resolve(
+        "RAJESH KUMAR", "DPL", candidates,
+        context_text="Purpose: Investor advance refund",
+        history=history,
+    )
+    assert result.ambiguous is False
+    assert result.reason == "narration_context_match"
+    assert result.row["Parent Account Head"] == "ADVANCE FROM CUSTOMER (INVESTOR)"
+
+
+def test_history_still_wins_when_narration_is_inconclusive():
+    # Narration text present but doesn't favor any candidate (no keyword
+    # overlap) - history should still be consulted as the next priority.
+    candidates = [
+        _row("RAJESH KUMAR", "SUNDRY CREDITORS - OTHER"),
+        _row("RAJESH KUMAR", "GENERAL CATEGORY-FLATS"),
+    ]
+    history = {
+        "RAJESH KUMAR": Counter({
+            ("RAJESH KUMAR", "SUNDRY CREDITORS - OTHER"): 9,
+            ("RAJESH KUMAR", "GENERAL CATEGORY-FLATS"): 1,
+        })
+    }
+    result = account_head_resolver.resolve(
+        "RAJESH KUMAR", "DPL", candidates,
+        context_text="Payment for miscellaneous items unrelated to either option",
+        history=history,
+    )
+    assert result.ambiguous is False
+    assert result.reason == "historical_majority"
+    assert result.row["Parent Account Head"] == "SUNDRY CREDITORS - OTHER"
+
+
+def test_ambiguous_fallback_pre_fills_best_evidenced_candidate_not_first_seen():
+    # Three candidates, first one (index 0, "GENERAL CATEGORY-FLATS") has
+    # zero narration/history signal; the other two are tied on narration
+    # (one shared keyword each) and tied on history (equal counts) - both
+    # ties mean neither signal is individually decisive, so this still
+    # falls through to the ambiguous fallback. But the pre-filled row must
+    # come from ranking (narration score, then historical count), not
+    # deduped[0] - "GENERAL CATEGORY-FLATS" must NOT be pre-filled, since
+    # it has no evidence behind it at all.
+    candidates = [
+        _row("RAJESH KUMAR", "GENERAL CATEGORY-FLATS"),
+        _row("RAJESH KUMAR", "SUNDRY CREDITORS - OTHER"),
+        _row("RAJESH KUMAR", "ADVANCE FROM CUSTOMER (INVESTOR)"),
+    ]
+    history = {
+        "RAJESH KUMAR": Counter({
+            ("RAJESH KUMAR", "SUNDRY CREDITORS - OTHER"): 2,
+            ("RAJESH KUMAR", "ADVANCE FROM CUSTOMER (INVESTOR)"): 2,
+        })
+    }
+    result = account_head_resolver.resolve(
+        "RAJESH KUMAR", "DPL", candidates,
+        context_text="creditors investor",
+        history=history,
+    )
+    assert result.ambiguous is True
+    assert result.row["Parent Account Head"] != "GENERAL CATEGORY-FLATS"
+    assert result.row["Parent Account Head"] in {"SUNDRY CREDITORS - OTHER", "ADVANCE FROM CUSTOMER (INVESTOR)"}
+    assert result.candidates[0] is result.row
+    assert result.candidates[-1]["Parent Account Head"] == "GENERAL CATEGORY-FLATS"
+
+
 def test_same_beneficiary_can_legitimately_resolve_to_different_heads_across_transactions():
     # Two different transactions for the same ambiguous beneficiary, with
     # different narration context, must be allowed to resolve differently -

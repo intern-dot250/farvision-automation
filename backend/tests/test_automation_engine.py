@@ -1573,6 +1573,55 @@ def test_assign_rows_override_parent_account_head_unchanged_when_no_master_match
     assert txn.rows["LedgerDetails"][0]["Parent Account Head"] == "SALARY PAYABLE"
 
 
+def test_assign_rows_override_clears_leftover_ambiguity_from_original_classification(monkeypatch):
+    # A transaction that was originally flagged ambiguous (multiple Master
+    # candidates for the payee) but then matched an Override Rule - the
+    # override is a definitive, explicit answer and must supersede the
+    # leftover ambiguity, otherwise _attach_ambiguous_dropdowns() would
+    # later attach a dropdown built from the ORIGINAL candidates onto a row
+    # whose Account Head has since been overridden to something that may
+    # not even be one of those candidates.
+    from app.services import master_repository
+
+    df = pd.DataFrame.from_records(
+        [{"Company": "DPL", "Payee Name": "Ravi Vats(555)", "Account Head": "Ravi Vats(555)", "Parent Account Head": "IMPREST SITE IDW"}]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    txn = _receipt_payment_txn("Imprest", {"Parent Account Head": "SALARY PAYABLE"})
+    txn.description = "YIB-NEFT-YESME61620064305-Ravi Vats-UBIN0567370-Imprest-UNION BANK OF INDIA"
+    txn.source_sheet = "YES AH IDW 2457"
+    txn.classification.account_head_ambiguous = True
+    txn.classification.account_head_candidates = [
+        {"Account Head": "Ravi Vats", "Parent Account Head": "SALARY PAYABLE"},
+        {"Account Head": "Ravi Vats", "Parent Account Head": "SUNDRY CREDITORS - OTHER"},
+    ]
+
+    monkeypatch.setattr(
+        "app.services.automation_engine.ref_code.get_next_ref_code", lambda *a, **k: 1
+    )
+    monkeypatch.setattr(
+        "app.services.automation_engine.override_rules_repository.list_active",
+        lambda: [
+            {
+                "id": 1,
+                "description_keyword": "Ravi Vats",
+                "head": "Imprest",
+                "sheet_name": "YES AH IDW 2457",
+                "account_head": "Ravi Vats(555)",
+                "is_active": True,
+            }
+        ],
+    )
+
+    _assign_rows([txn], _FakeSettings(), run_id="test-run")
+
+    assert txn.rows["LedgerDetails"][0]["Account Head"] == "Ravi Vats(555)"
+    assert txn.rows["LedgerDetails"][0]["Parent Account Head"] == "IMPREST SITE IDW"
+    assert txn.classification.account_head_ambiguous is False
+    assert txn.classification.account_head_candidates is None
+
+
 def test_assign_rows_override_scopes_master_lookup_to_dpl_company(monkeypatch):
     # Master has the same Account Head name for both companies, with a
     # genuinely different Parent Account Head - the override fix must pick

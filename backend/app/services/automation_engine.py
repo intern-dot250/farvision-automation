@@ -742,6 +742,17 @@ def _assign_rows(transactions: list[TransactionRowSet], settings, run_id: str) -
             )
             if override:
                 rows["LedgerDetails"][0]["Account Head"] = override
+                # An override is a definitive, explicit answer - it must
+                # supersede any leftover ambiguity from the original
+                # (pre-override) classification. Without this,
+                # _attach_ambiguous_dropdowns() would still see
+                # account_head_candidates from the payee's original
+                # candidate set and attach a dropdown built from THOSE
+                # options onto a cell that no longer holds any of them,
+                # since the override may not even be one of the original
+                # candidates.
+                txn.classification.account_head_ambiguous = False
+                txn.classification.account_head_candidates = None
                 # Without this, Parent Account Head would keep whatever the
                 # *original* (pre-override) payee's Master row had - a
                 # combination that may not exist in Master at all (e.g.
@@ -1140,6 +1151,7 @@ def _run_automation_stream_body(dry_run: bool, rows: list[dict] | None, run_id: 
     # Force a fresh read at the start of every run so classification always
     # sees the current state of Master, not a stale snapshot.
     master_repository.clear_cache()
+    sheets_client.clear_worksheet_cache()
 
     yield {"type": "progress", "stage": "classifying", "processed": 0, "total": total}
 

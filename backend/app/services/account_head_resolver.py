@@ -146,11 +146,18 @@ def resolve(
     """Pick the right Account Head for a beneficiary that matched more than
     one Master row, without ever silently guessing.
 
-    Priority order: unique match -> historical majority (from Account Heads
-    already written for this payee) -> narration/context keyword overlap
-    against each candidate's Parent Account Head -> otherwise flagged
-    ambiguous (never a random/first-row pick) for the caller to write with a
-    placeholder plus an in-sheet dropdown.
+    Priority order: unique match -> narration/context keyword overlap
+    against each candidate's Parent Account Head -> historical majority
+    (from Account Heads already written for this payee) -> otherwise
+    flagged ambiguous, pre-filled with the best-evidenced (not first-seen)
+    candidate, for the caller to write with a dropdown so a human confirms.
+
+    Narration is checked before history so a stale/wrong historical
+    majority for a payee can never override what THIS transaction's own
+    narration says - letting history win by default would let one earlier
+    misclassification keep reinforcing itself on every future transaction
+    for that payee, a feedback loop this function must not create. History
+    is only consulted once narration itself is inconclusive.
     """
     deduped = dedupe_candidates(candidates)
 
@@ -167,21 +174,52 @@ def resolve(
 
     heads = [str(c.get("Account Head")) for c in deduped]
 
-    # Level: historical majority - only decisive if one candidate strictly
-    # dominates the payee's write history; a tie (or no history) falls
-    # through rather than forcing a pick (see resolve()'s Test 7). Keyed on
-    # the same (Account Head, Parent Account Head) pair as dedupe_candidates,
-    # not Account Head alone - real duplicate-beneficiary rows usually share
-    # a near-identical Account Head and differ only in Parent Account Head,
+    # Level: narration/context keyword overlap against each candidate's
+    # Parent Account Head - only decisive when exactly one candidate has a
+    # strictly higher score than every other. Scored for every deduped
+    # candidate (not just when decisive) since the scores also rank
+    # candidates for the ambiguous-fallback pre-fill below, if nothing here
+    # or in history turns out to be decisive.
+    context_words = _keywords(context_text or "")
+    narration_scored = sorted(
+        ((_context_score(context_words, c), c) for c in deduped),
+        key=lambda pair: pair[0],
+        reverse=True,
+    ) if context_words else []
+
+    if narration_scored:
+        best_score, best_candidate = narration_scored[0]
+        runner_up_score = narration_scored[1][0] if len(narration_scored) > 1 else 0
+        if best_score > 0 and best_score > runner_up_score:
+            confidence = min(0.5 + 0.1 * best_score, 0.95)
+            logger.info(
+                f"[account_head_resolver] beneficiary={payee_name!r} candidates={heads} "
+                f"selected={best_candidate.get('Account Head')!r} confidence={confidence:.2f} "
+                f"reason=narration_context_match"
+            )
+            return ResolveResult(
+                row=best_candidate, ambiguous=False, reason="narration_context_match",
+                confidence=confidence, candidates=deduped,
+            )
+
+    # Level: historical majority - only consulted once narration didn't
+    # decide, and only decisive if one candidate strictly dominates the
+    # payee's write history; a tie (or no history) falls through rather
+    # than forcing a pick (see resolve()'s Test 7). Keyed on the same
+    # (Account Head, Parent Account Head) pair as dedupe_candidates, not
+    # Account Head alone - real duplicate-beneficiary rows usually share a
+    # near-identical Account Head and differ only in Parent Account Head,
     # so Account Head alone can't tell them apart.
     normalized_payee = master_repository._normalize(payee_name) if payee_name else ""
     payee_history = (history or {}).get(normalized_payee)
+    historical_counts: dict[tuple[str, str], int] = {}
     if payee_history:
         candidate_by_key = {_candidate_key(c): c for c in deduped}
         relevant = {
             key: count for key, count in payee_history.items()
             if key in candidate_by_key
         }
+        historical_counts = relevant
         if relevant:
             best_key, best_count = max(relevant.items(), key=lambda kv: kv[1])
             other_counts = [count for key, count in relevant.items() if key != best_key]
@@ -197,35 +235,29 @@ def resolve(
                     confidence=confidence, candidates=deduped,
                 )
 
-    # Level: narration/context keyword overlap against each candidate's
-    # Parent Account Head - only decisive when exactly one candidate has a
-    # strictly higher score than every other.
-    context_words = _keywords(context_text or "")
-    if context_words:
-        scored = sorted(
-            ((_context_score(context_words, c), c) for c in deduped),
-            key=lambda pair: pair[0],
-            reverse=True,
-        )
-        best_score, best_candidate = scored[0]
-        runner_up_score = scored[1][0] if len(scored) > 1 else 0
-        if best_score > 0 and best_score > runner_up_score:
-            confidence = min(0.5 + 0.1 * best_score, 0.95)
-            logger.info(
-                f"[account_head_resolver] beneficiary={payee_name!r} candidates={heads} "
-                f"selected={best_candidate.get('Account Head')!r} confidence={confidence:.2f} "
-                f"reason=narration_context_match"
-            )
-            return ResolveResult(
-                row=best_candidate, ambiguous=False, reason="narration_context_match",
-                confidence=confidence, candidates=deduped,
-            )
+    # No confident signal - never silently pick an arbitrary first
+    # candidate. Rank the deduped candidates by whatever partial evidence
+    # exists (narration overlap score, then historical write count) so the
+    # placeholder value written to the cell - before a human picks from the
+    # dropdown - is the single best-available guess, not first-seen order.
+    narration_score_by_id = {id(c): score for score, c in narration_scored}
 
+    def _rank_key(candidate: dict) -> tuple[int, int]:
+        return (
+            narration_score_by_id.get(id(candidate), 0),
+            historical_counts.get(_candidate_key(candidate), 0),
+        )
+
+    ranked = sorted(deduped, key=_rank_key, reverse=True)
+    candidate_summary = ", ".join(
+        f"{i + 1}. {c.get('Account Head')!r}->{c.get('Parent Account Head')!r} score={_rank_key(c)}"
+        for i, c in enumerate(ranked)
+    )
     logger.warning(
-        f"[account_head_resolver] beneficiary={payee_name!r} candidates={heads} "
-        f"REVIEW_REQUIRED reason=no_confident_signal - dropdown required"
+        f"[account_head_resolver] beneficiary={payee_name!r} company={company!r} "
+        f"candidates=[{candidate_summary}] REVIEW_REQUIRED reason=no_confident_signal - dropdown required"
     )
     return ResolveResult(
-        row=deduped[0], ambiguous=True, reason="no_confident_signal",
-        confidence=0.0, candidates=deduped,
+        row=ranked[0], ambiguous=True, reason="no_confident_signal",
+        confidence=0.0, candidates=ranked,
     )

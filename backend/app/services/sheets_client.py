@@ -145,8 +145,48 @@ def open_sheet(sheet_id: str) -> gspread.Spreadsheet:
     return get_client().open_by_key(sheet_id)
 
 
-def get_worksheet(sheet_id: str, worksheet_name: str) -> gspread.Worksheet:
+@lru_cache
+def _get_worksheet_cached(sheet_id: str, worksheet_name: str) -> gspread.Worksheet:
     return open_sheet(sheet_id).worksheet(worksheet_name)
+
+
+def get_worksheet(sheet_id: str, worksheet_name: str) -> gspread.Worksheet:
+    """Cached per (sheet_id, worksheet_name) for the lifetime of the process,
+    cleared once per automation run via clear_worksheet_cache() (alongside
+    master_repository.clear_cache()). gspread's Spreadsheet.worksheet()
+    issues a full, uncached spreadsheet-metadata read API call on every
+    invocation - and this function sits at the top of nearly every Sheets
+    operation in this module, including once per ambiguous transaction
+    during dropdown attachment, so leaving it uncached was burning through
+    Google's per-minute read quota fast enough to make the ambiguous-Account-
+    Head dropdown silently fail to attach under load (confirmed live via the
+    audit_log: repeated 429s on "Failed to attach Account Head dropdown").
+    """
+    return _get_worksheet_cached(sheet_id, worksheet_name)
+
+
+_header_cache: dict[tuple[str, str], list[str]] = {}
+
+
+def _get_header(sheet_id: str, worksheet_name: str, worksheet: gspread.Worksheet | None = None) -> list[str]:
+    """Header row (row 1), cached per (sheet_id, worksheet_name) for the same
+    reason as get_worksheet() above - every dropdown/note/formula/lookup
+    helper below was independently re-fetching this via its own API call on
+    every invocation."""
+    key = (sheet_id, worksheet_name)
+    if key not in _header_cache:
+        ws = worksheet or get_worksheet(sheet_id, worksheet_name)
+        _header_cache[key] = ws.row_values(1)
+    return _header_cache[key]
+
+
+def clear_worksheet_cache() -> None:
+    """Clears the worksheet-object and header-row caches above - call once
+    per automation run (alongside master_repository.clear_cache()) so a
+    long-lived warm serverless instance doesn't serve a stale worksheet
+    handle or header row across runs."""
+    _get_worksheet_cached.cache_clear()
+    _header_cache.clear()
 
 
 def list_worksheet_titles(sheet_id: str) -> list[str]:
@@ -158,7 +198,7 @@ def _ensure_header(worksheet: gspread.Worksheet, sheet_id: str, worksheet_name: 
     someone accidentally deleted row 1 along with data rows) - without this,
     gspread's get_all_records() raises on an all-empty header row (reads as
     duplicate "" columns) instead of just treating the sheet as empty."""
-    header = worksheet.row_values(1)
+    header = _get_header(sheet_id, worksheet_name, worksheet)
     if not header:
         header = _canonical_header(sheet_id, worksheet_name)
         if not header:
@@ -166,6 +206,7 @@ def _ensure_header(worksheet: gspread.Worksheet, sheet_id: str, worksheet_name: 
                 f"'{worksheet_name}' has no header row and no canonical header is known for it"
             )
         worksheet.update(range_name="A1", values=[header])
+        _header_cache[(sheet_id, worksheet_name)] = header
     return header
 
 
@@ -193,7 +234,7 @@ def get_columns(sheet_id: str, worksheet_name: str, columns: list[str]) -> list[
     if any requested column doesn't exist.
     """
     worksheet = get_worksheet(sheet_id, worksheet_name)
-    header = worksheet.row_values(1)
+    header = _get_header(sheet_id, worksheet_name, worksheet)
     if any(column not in header for column in columns):
         return []
     indexes = [header.index(column) + 1 for column in columns]
@@ -206,7 +247,7 @@ def find_row_number(sheet_id: str, worksheet_name: str, column: str, value) -> i
     `value` (searched from the bottom, since the row of interest was just
     appended), or None if `column` doesn't exist or no row matches."""
     worksheet = get_worksheet(sheet_id, worksheet_name)
-    header = worksheet.row_values(1)
+    header = _get_header(sheet_id, worksheet_name, worksheet)
     if column not in header:
         return None
     col_index = header.index(column) + 1
@@ -224,7 +265,7 @@ def get_column_values(sheet_id: str, worksheet_name: str, column: str) -> set[st
     if the column doesn't exist in this worksheet.
     """
     worksheet = get_worksheet(sheet_id, worksheet_name)
-    header = worksheet.row_values(1)
+    header = _get_header(sheet_id, worksheet_name, worksheet)
     if column not in header:
         return set()
     col_index = header.index(column) + 1  # gspread columns are 1-indexed
@@ -326,7 +367,7 @@ def add_dropdown_validation(
     review step. No-op if `column` isn't a real header on this worksheet.
     """
     worksheet = get_worksheet(sheet_id, worksheet_name)
-    header = worksheet.row_values(1)
+    header = _get_header(sheet_id, worksheet_name, worksheet)
     if column not in header:
         return
     letter = _column_letter(header.index(column) + 1)
@@ -342,7 +383,8 @@ def column_letter_for(sheet_id: str, worksheet_name: str, column: str) -> str | 
     """Spreadsheet column letter (e.g. "F") for a named header column, or
     None if `column` isn't a real header - used to build a cell reference
     (e.g. for a formula referring to another cell in the same row)."""
-    header = get_worksheet(sheet_id, worksheet_name).row_values(1)
+    worksheet = get_worksheet(sheet_id, worksheet_name)
+    header = _get_header(sheet_id, worksheet_name, worksheet)
     if column not in header:
         return None
     return _column_letter(header.index(column) + 1)
@@ -356,7 +398,7 @@ def set_cell_formula(sheet_id: str, worksheet_name: str, row_number: int, column
     needs its own write path. No-op if `column` isn't a real header.
     """
     worksheet = get_worksheet(sheet_id, worksheet_name)
-    header = worksheet.row_values(1)
+    header = _get_header(sheet_id, worksheet_name, worksheet)
     if column not in header:
         return
     letter = _column_letter(header.index(column) + 1)
@@ -372,7 +414,7 @@ def add_cell_note(sheet_id: str, worksheet_name: str, row_number: int, column: s
     real header on this worksheet.
     """
     worksheet = get_worksheet(sheet_id, worksheet_name)
-    header = worksheet.row_values(1)
+    header = _get_header(sheet_id, worksheet_name, worksheet)
     if column not in header:
         return
     letter = _column_letter(header.index(column) + 1)

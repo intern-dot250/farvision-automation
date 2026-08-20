@@ -616,3 +616,64 @@ def test_read_all_records_raises_for_unknown_sheet_with_missing_header(monkeypat
     except ValueError as exc:
         assert "MysteryTab" in str(exc)
     mock_ws.get_all_records.assert_not_called()
+
+
+def test_get_worksheet_only_opens_the_spreadsheet_once_per_process(monkeypatch):
+    sheets_client._get_worksheet_cached.cache_clear()
+    mock_ws = MagicMock()
+    mock_spreadsheet = MagicMock()
+    mock_spreadsheet.worksheet.return_value = mock_ws
+    open_calls = []
+    monkeypatch.setattr(
+        sheets_client, "open_sheet", lambda sid: (open_calls.append(sid), mock_spreadsheet)[1]
+    )
+
+    sheets_client.get_worksheet("sheet1", "LedgerDetails")
+    sheets_client.get_worksheet("sheet1", "LedgerDetails")
+    sheets_client.get_worksheet("sheet1", "LedgerDetails")
+
+    assert mock_spreadsheet.worksheet.call_count == 1
+    sheets_client._get_worksheet_cached.cache_clear()
+
+
+def test_clear_worksheet_cache_forces_a_re_fetch(monkeypatch):
+    sheets_client._get_worksheet_cached.cache_clear()
+    mock_spreadsheet = MagicMock()
+    mock_spreadsheet.worksheet.return_value = MagicMock()
+    monkeypatch.setattr(sheets_client, "open_sheet", lambda sid: mock_spreadsheet)
+
+    sheets_client.get_worksheet("sheet1", "LedgerDetails")
+    sheets_client.clear_worksheet_cache()
+    sheets_client.get_worksheet("sheet1", "LedgerDetails")
+
+    assert mock_spreadsheet.worksheet.call_count == 2
+
+
+def test_header_is_only_fetched_once_across_multiple_helper_calls(monkeypatch):
+    mock_ws = MagicMock()
+    mock_ws.row_values.return_value = ["Link Ref Code", "Account Head", "Parent Account Head"]
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    sheets_client.find_row_number("sheet1", "LedgerDetails", "Account Head", "X")
+    sheets_client.add_dropdown_validation("sheet1", "LedgerDetails", 5, "Account Head", ["A", "B"])
+    sheets_client.add_cell_note("sheet1", "LedgerDetails", 5, "Account Head", "note")
+    sheets_client.set_cell_formula("sheet1", "LedgerDetails", 5, "Parent Account Head", "=1")
+    sheets_client.column_letter_for("sheet1", "LedgerDetails", "Account Head")
+
+    assert mock_ws.row_values.call_count == 1
+
+
+def test_header_cache_is_per_worksheet(monkeypatch):
+    ledger_ws = MagicMock()
+    ledger_ws.row_values.return_value = ["Link Ref Code", "Account Head"]
+    receipt_ws = MagicMock()
+    receipt_ws.row_values.return_value = ["Link Ref Code", "Narration"]
+
+    def _get_worksheet(sid, wn):
+        return ledger_ws if wn == "LedgerDetails" else receipt_ws
+
+    monkeypatch.setattr(sheets_client, "get_worksheet", _get_worksheet)
+
+    assert sheets_client.column_letter_for("sheet1", "LedgerDetails", "Account Head") == "B"
+    assert sheets_client.column_letter_for("sheet1", "ReceiptPayment", "Narration") == "B"
+    assert sheets_client.column_letter_for("sheet1", "ReceiptPayment", "Account Head") is None

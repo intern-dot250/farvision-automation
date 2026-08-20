@@ -17,6 +17,11 @@ _LOOKUP_COLUMNS = ("Payee Name", "Account Head")
 # ("S N LTD" vs "R N LTD") don't collide.
 _FUZZY_MIN_RATIO = 0.92
 
+# How close two fuzzy candidates' ratios need to be before they're treated
+# as an ambiguous near-tie instead of one decisively winning - e.g. 94% vs
+# 93% (a 0.01 gap) is too close to trust as a confident automatic pick.
+_FUZZY_AMBIGUITY_MARGIN = 0.03
+
 # Master's Payee Name often has a short employee/vendor code or tag appended
 # after the plain name used in bank descriptions - e.g. "Ravi Vats(555)",
 # "Ram Kishan (C)", "Rahul Kumar - CR0198 (AR)". Strip only that kind of
@@ -238,30 +243,40 @@ def find_party(payee_name: str | None, company: str | None = "DPL") -> dict | No
     return find_party_fuzzy(payee_name, company=company)
 
 
-def find_party_fuzzy(payee_name: str | None, company: str | None = "DPL") -> dict | None:
-    """Last-resort match for a payee name that's a near-miss typo of a real
-    Master entry - e.g. "Aravali Height Resident Walfare Association" vs
-    Master's "...WELFARE...". Only ever called after find_party()'s exact/
-    canonical matching has already found nothing - never overrides or
-    competes with an exact match.
+def find_party_fuzzy_candidates(payee_name: str | None, company: str | None = "DPL") -> list[dict]:
+    """Fuzzy typo match for a payee name against a real Master entry - e.g.
+    "Aravali Height Resident Walfare Association" vs Master's "...WELFARE...".
+    Only ever consulted after exact/canonical matching has already found
+    nothing.
 
     Deliberately narrow, not a general fuzzy search: requires both a high
     similarity ratio (difflib.SequenceMatcher, >= _FUZZY_MIN_RATIO) AND the
     same word count (blocks a high ratio that's really just one name being a
-    truncated/extended version of a genuinely different one) AND that it's
-    the single best-scoring row with no other row tied at the same score -
-    if two Master rows are both plausible typo candidates, this refuses to
-    guess and returns None, the same "never guess silently" principle
+    truncated/extended version of a genuinely different one).
+
+    Instead of only refusing on an exact tie, returns every row within
+    _FUZZY_AMBIGUITY_MARGIN of the best ratio - so a genuinely close call
+    (e.g. 94% vs 93%, not just an exact 94.0% vs 94.0% tie) is surfaced as
+    multiple ambiguous candidates rather than either silently auto-picking
+    the marginally-higher one or refusing with no candidates at all for the
+    caller to build a dropdown from. Never guesses: a close call is always
+    someone's decision, per the same "never guess silently" principle
     account_head_resolver already follows for ambiguous Account Heads.
+
+    Returns []: below threshold, no payee_name, or no candidate at all.
+    Returns a single-element list: one row decisively better than the rest
+    (outside the margin) - the unambiguous match.
+    Returns 2+ rows: near-tied candidates within the margin - genuinely
+    ambiguous, the caller must not auto-pick between them.
     """
     if not payee_name:
-        return None
+        return []
 
     df = _load_master_df()
     key = _normalize(payee_name)
     key_word_count = len(key.split())
     if key_word_count == 0:
-        return None
+        return []
 
     company_mask = None
     if company and "Company" in df.columns:
@@ -286,18 +301,35 @@ def find_party_fuzzy(payee_name: str | None, company: str | None = "DPL") -> dic
             continue
 
         best_ratio = max(ratio for ratio, _ in scored)
-        best_matches = [idx for ratio, idx in scored if ratio == best_ratio]
-        if len(best_matches) != 1:
-            return None  # ambiguous - two+ equally-close typo candidates, never guess
+        near_best = [(ratio, idx) for ratio, idx in scored if best_ratio - ratio <= _FUZZY_AMBIGUITY_MARGIN]
+        rows = [df.loc[idx].to_dict() for _, idx in near_best]
 
-        row = df.loc[best_matches[0]].to_dict()
-        logger.info(
-            f"[master_repository] fuzzy_match payee={payee_name!r} "
-            f"matched={row.get(column)!r} ratio={best_ratio:.3f}"
-        )
-        return row
+        if len(rows) == 1:
+            logger.info(
+                f"[master_repository] fuzzy_match payee={payee_name!r} "
+                f"matched={rows[0].get(column)!r} ratio={best_ratio:.3f}"
+            )
+        else:
+            logger.info(
+                f"[master_repository] fuzzy_match payee={payee_name!r} column={column!r} "
+                f"AMBIGUOUS {len(rows)} candidates within {_FUZZY_AMBIGUITY_MARGIN} of best "
+                f"ratio {best_ratio:.3f} - never guessing"
+            )
+        return rows
 
-    return None
+    return []
+
+
+def find_party_fuzzy(payee_name: str | None, company: str | None = "DPL") -> dict | None:
+    """Single-result fuzzy match, kept for callers (e.g. find_party()) that
+    only ever want one row or nothing. Implemented on top of
+    find_party_fuzzy_candidates() - returns that single row only when
+    exactly one candidate exists (no genuinely close runner-up); returns
+    None on a near-tie (including an exact tie, a margin of 0) or no match,
+    the same "never guess" behavior this function always had.
+    """
+    candidates = find_party_fuzzy_candidates(payee_name, company=company)
+    return candidates[0] if len(candidates) == 1 else None
 
 
 def find_party_candidates(payee_name: str | None, company: str | None = "DPL") -> list[dict]:
@@ -341,8 +373,12 @@ def find_party_candidates(payee_name: str | None, company: str | None = "DPL") -
         if not match.empty:
             return match.to_dict("records")
 
-    fuzzy = find_party_fuzzy(payee_name, company=company)
-    return [fuzzy] if fuzzy else []
+    # Uses the multi-candidate fuzzy fallback (not find_party_fuzzy()) so a
+    # near-tied fuzzy match surfaces as a real ambiguous candidate list for
+    # account_head_resolver to flag and dropdown, instead of silently
+    # collapsing to "no match" the way a bare find_party_fuzzy() -> None
+    # would.
+    return find_party_fuzzy_candidates(payee_name, company=company)
 
 
 def _category_rows(account_head: str | None, parent_account_head: str | None) -> pd.DataFrame:

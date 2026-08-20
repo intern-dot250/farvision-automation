@@ -545,6 +545,62 @@ def test_find_party_candidates_falls_back_to_fuzzy_as_single_element_list(monkey
     assert candidates[0]["Parent Account Head"] == "SUNDRY CREDITORS - EXPENSES"
 
 
+def test_find_party_fuzzy_candidates_flags_near_miss_margin_as_ambiguous(monkeypatch):
+    # Two candidates at ratios 0.986 and 0.973 (a 0.013 gap, both above the
+    # 0.92 threshold) - too close to trust as a confident automatic pick -
+    # must both come back as candidates instead of one being silently
+    # auto-picked just for having the marginally higher ratio.
+    df = pd.DataFrame.from_records(
+        [
+            {"Payee Name": "RAJESH KUMAR SHARMA VERMA CONTRACTOR", "Account Head": "X", "Parent Account Head": "A"},
+            {"Payee Name": "RAJESH KUMAR SHARMO VERMA CONTRACTORS", "Account Head": "Y", "Parent Account Head": "B"},
+        ]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    candidates = master_repository.find_party_fuzzy_candidates("RAJESH KUMAR SHARMA VERMA CONTRACTORS")
+
+    assert len(candidates) == 2
+    assert {c["Parent Account Head"] for c in candidates} == {"A", "B"}
+    # find_party_fuzzy() (single-result contract) must refuse the same way.
+    assert master_repository.find_party_fuzzy("RAJESH KUMAR SHARMA VERMA CONTRACTORS") is None
+
+
+def test_find_party_fuzzy_candidates_still_auto_picks_a_clear_winner(monkeypatch):
+    # A candidate decisively better than the rest (margin exceeded) must
+    # still come back as a single-element list, unchanged from before.
+    df = pd.DataFrame.from_records(
+        [{
+            "Payee Name": "ARAVALI HEIGHT RESIDENT WELFARE ASSOCIATION",
+            "Account Head": "ARAVALI HEIGHT RESIDENT WELFARE ASSOCIATION",
+            "Parent Account Head": "SUNDRY CREDITORS - EXPENSES",
+        }]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    candidates = master_repository.find_party_fuzzy_candidates("Aravali Height Resident Walfare Association")
+
+    assert len(candidates) == 1
+    assert candidates[0]["Parent Account Head"] == "SUNDRY CREDITORS - EXPENSES"
+
+
+def test_find_party_fuzzy_candidates_never_crosses_company_boundary_on_a_near_miss(monkeypatch):
+    # A closer-ratio same-name row belonging to a different company must
+    # never enter the candidate set, even under the new margin logic.
+    df = pd.DataFrame.from_records(
+        [
+            {"Company": "DPL", "Payee Name": "RAJESH KUMAR SHARMA", "Account Head": "X", "Parent Account Head": "DPL VALUE"},
+            {"Company": "AMB", "Payee Name": "RAJESH KUMAR SHRMA", "Account Head": "Y", "Parent Account Head": "AMB VALUE"},
+        ]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    candidates = master_repository.find_party_fuzzy_candidates("RAJESH KUMAR SHRMA", company="DPL")
+
+    assert len(candidates) == 1
+    assert candidates[0]["Parent Account Head"] == "DPL VALUE"
+
+
 def test_find_party_fuzzy_no_match_for_unrelated_name(monkeypatch):
     df = pd.DataFrame.from_records(
         [{"Payee Name": "TOTALLY DIFFERENT COMPANY", "Account Head": "TOTALLY DIFFERENT COMPANY", "Parent Account Head": "X"}]
