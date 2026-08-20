@@ -7,6 +7,7 @@ from app.services.automation_engine import (
     TransactionRowSet,
     _assign_rows,
     _attach_ambiguous_dropdowns,
+    _attach_no_match_dropdowns,
     _attach_tax_info_description_dropdowns,
     _build_deposit_withdrawal_rows,
     _build_receipt_payment_rows,
@@ -330,6 +331,37 @@ def test_ledger_details_parent_account_head_prefers_master_when_present():
     rows = _build_receipt_payment_rows(txn, link_ref_code=4)
 
     assert rows["LedgerDetails"][0]["Parent Account Head"] == "SUNDRY CREDITORS - CONTRACTORS"
+
+
+def test_ledger_details_parent_account_head_prefilled_from_no_match_mapping():
+    # Salary Site with zero Master candidates (classifier already resolved
+    # this to a category dropdown, see classifier._HEAD_TO_PARENT_ACCOUNT_
+    # HEAD) - every option in that dropdown shares the same Parent Account
+    # Head, so it's safe to pre-fill directly, unlike the generic trusted
+    # head string this guards against elsewhere.
+    txn = _receipt_payment_txn("Salary Site", {})
+    txn.classification.no_match_parent_account_head = "SALARY PAYABLE"
+    txn.classification.no_match_dropdown_options = ["Ashish Gaur(157)", "Bharat Singh(406)"]
+    rows = _build_receipt_payment_rows(txn, link_ref_code=8)
+
+    ledger = rows["LedgerDetails"][0]
+    assert ledger["Parent Account Head"] == "SALARY PAYABLE"
+    # AdjustmentDetails follows automatically from the non-blank Parent
+    # Account Head, no special-casing needed.
+    assert len(rows["AdjustmentDetails"]) == 1
+
+
+def test_ledger_details_parent_account_head_no_match_mapping_never_overrides_a_real_master_match():
+    # A genuine Master match must always win over the no-match mapping, even
+    # if both happen to be set (shouldn't happen per classifier.py, but this
+    # guards the precedence explicitly).
+    txn = _receipt_payment_txn(
+        "Salary Site", {"Parent Account Head": "SUNDRY CREDITORS - OTHER"}
+    )
+    txn.classification.no_match_parent_account_head = "SALARY PAYABLE"
+    rows = _build_receipt_payment_rows(txn, link_ref_code=9)
+
+    assert rows["LedgerDetails"][0]["Parent Account Head"] == "SUNDRY CREDITORS - OTHER"
 
 
 def test_adjustment_details_row_is_generated_when_parent_account_head_present():
@@ -2151,7 +2183,158 @@ def test_attach_ambiguous_dropdowns_skips_deposit_withdrawal_destination():
     ) as mock_find:
         _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")
 
+
+# --- _attach_no_match_dropdowns: category dropdown for a trusted head with
+# a known Parent Account Head mapping but zero extractable payee name ---
+
+
+def _no_match_txn(options, destination="receipt_payment", link_ref_code=81):
+    txn = _receipt_payment_txn("Salary Site", {})
+    txn.classification.no_match_dropdown_options = options
+    txn.classification.no_match_parent_account_head = "SALARY PAYABLE"
+    txn.destination = destination
+    txn.rows = {"LedgerDetails": [{"Link Ref Code": link_ref_code}]}
+    return txn
+
+
+_NO_MATCH_OPTIONS = ["Ashish Gaur(157)", "Bharat Singh(406)"]
+
+
+def test_attach_no_match_dropdowns_calls_add_dropdown_with_master_payee_list():
+    txn = _no_match_txn(_NO_MATCH_OPTIONS)
+
+    with patch(
+        "app.services.automation_engine.sheets_client.find_row_number", return_value=82
+    ), patch(
+        "app.services.automation_engine.sheets_client.add_dropdown_validation"
+    ) as mock_add, patch(
+        "app.services.automation_engine.sheets_client.add_cell_note"
+    ):
+        _attach_no_match_dropdowns([txn], _FakeSettings(), run_id="test-run")
+
+    mock_add.assert_called_once_with(
+        "rp-sheet-id", "LedgerDetails", 82, "Account Head", _NO_MATCH_OPTIONS
+    )
+
+
+def test_attach_no_match_dropdowns_also_attaches_a_note():
+    txn = _no_match_txn(_NO_MATCH_OPTIONS)
+
+    with patch(
+        "app.services.automation_engine.sheets_client.find_row_number", return_value=82
+    ), patch(
+        "app.services.automation_engine.sheets_client.add_dropdown_validation"
+    ), patch(
+        "app.services.automation_engine.sheets_client.add_cell_note"
+    ) as mock_note:
+        _attach_no_match_dropdowns([txn], _FakeSettings(), run_id="test-run")
+
+    mock_note.assert_called_once()
+    args = mock_note.call_args.args
+    assert args[:4] == ("rp-sheet-id", "LedgerDetails", 82, "Account Head")
+
+
+def test_attach_no_match_dropdowns_never_writes_a_formula():
+    # Unlike the synthesized-label ambiguous case, every option shares the
+    # same Parent Account Head - already written directly by
+    # _build_receipt_payment_rows, no REGEXEXTRACT formula needed here.
+    txn = _no_match_txn(_NO_MATCH_OPTIONS)
+
+    with patch(
+        "app.services.automation_engine.sheets_client.find_row_number", return_value=82
+    ), patch(
+        "app.services.automation_engine.sheets_client.add_dropdown_validation"
+    ), patch(
+        "app.services.automation_engine.sheets_client.add_cell_note"
+    ), patch(
+        "app.services.automation_engine.sheets_client.set_cell_formula"
+    ) as mock_formula, patch(
+        "app.services.automation_engine.sheets_client.column_letter_for"
+    ) as mock_letter:
+        _attach_no_match_dropdowns([txn], _FakeSettings(), run_id="test-run")
+
+    mock_formula.assert_not_called()
+    mock_letter.assert_not_called()
+
+
+def test_attach_no_match_dropdowns_skips_transactions_without_options():
+    txn = _no_match_txn(None)
+
+    with patch(
+        "app.services.automation_engine.sheets_client.find_row_number"
+    ) as mock_find, patch(
+        "app.services.automation_engine.sheets_client.add_dropdown_validation"
+    ) as mock_add:
+        _attach_no_match_dropdowns([txn], _FakeSettings(), run_id="test-run")
+
     mock_find.assert_not_called()
+    mock_add.assert_not_called()
+
+
+def test_attach_no_match_dropdowns_skips_deposit_withdrawal_destination():
+    txn = _no_match_txn(_NO_MATCH_OPTIONS, destination="deposit_withdrawal")
+
+    with patch(
+        "app.services.automation_engine.sheets_client.find_row_number"
+    ) as mock_find:
+        _attach_no_match_dropdowns([txn], _FakeSettings(), run_id="test-run")
+
+    mock_find.assert_not_called()
+
+
+def test_attach_no_match_dropdowns_retries_once_then_logs_error_on_final_failure():
+    txn = _no_match_txn(_NO_MATCH_OPTIONS)
+
+    with patch(
+        "app.services.automation_engine.sheets_client.find_row_number", return_value=82
+    ), patch(
+        "app.services.automation_engine.sheets_client.add_dropdown_validation",
+        side_effect=RuntimeError("Sheets API hiccup"),
+    ) as mock_add, patch(
+        "app.services.automation_engine.sheets_client.add_cell_note"
+    ), patch(
+        "app.services.automation_engine.ledger_repository.log_audit"
+    ) as mock_log:
+        _attach_no_match_dropdowns([txn], _FakeSettings(), run_id="test-run")
+
+    assert mock_add.call_count == 2
+    mock_log.assert_called_once()
+    assert mock_log.call_args.args[1] == "error"
+
+
+def test_attach_no_match_dropdowns_failure_never_raises():
+    txn = _no_match_txn(_NO_MATCH_OPTIONS)
+
+    with patch(
+        "app.services.automation_engine.sheets_client.find_row_number", return_value=82
+    ), patch(
+        "app.services.automation_engine.sheets_client.add_dropdown_validation",
+        side_effect=RuntimeError("boom"),
+    ), patch(
+        "app.services.automation_engine.sheets_client.add_cell_note",
+        side_effect=RuntimeError("boom"),
+    ), patch(
+        "app.services.automation_engine.ledger_repository.log_audit"
+    ):
+        _attach_no_match_dropdowns([txn], _FakeSettings(), run_id="test-run")  # must not raise
+
+
+def test_attach_no_match_dropdowns_survives_find_row_number_failure():
+    txn = _no_match_txn(_NO_MATCH_OPTIONS)
+
+    with patch(
+        "app.services.automation_engine.sheets_client.find_row_number",
+        side_effect=RuntimeError("quota exceeded"),
+    ), patch(
+        "app.services.automation_engine.sheets_client.add_dropdown_validation"
+    ) as mock_add, patch(
+        "app.services.automation_engine.ledger_repository.log_audit"
+    ) as mock_log:
+        _attach_no_match_dropdowns([txn], _FakeSettings(), run_id="test-run")  # must not raise
+
+    mock_add.assert_not_called()
+    mock_log.assert_called_once()
+    assert mock_log.call_args.args[1] == "error"
 
 
 # --- _write_transactions: wiring to _attach_tax_info_description_dropdowns ---
@@ -2423,6 +2606,53 @@ def test_run_automation_stream_survives_attach_ambiguous_dropdowns_failure():
         "app.services.automation_engine.master_repository.list_tds_descriptions", return_value=[]
     ), patch(
         "app.services.automation_engine._attach_ambiguous_dropdowns",
+        side_effect=RuntimeError("quota exceeded"),
+    ), patch(
+        "app.services.automation_engine.ledger_repository.log_audit"
+    ) as mock_log:
+        events = list(engine_module.run_automation_stream(dry_run=False, rows=bank_rows))  # must not raise
+
+    assert events[-1]["type"] == "result"
+    assert any(call.args[1] == "error" for call in mock_log.call_args_list)
+
+
+def test_run_automation_stream_survives_attach_no_match_dropdowns_failure():
+    # Same structural guarantee as _attach_ambiguous_dropdowns above, for the
+    # sibling no-match category dropdown step.
+    from app.services import automation_engine as engine_module
+
+    bank_rows = [
+        {
+            "SL#": "1",
+            "REFERENCE": "REF-STREAM-2",
+            "DESCRIPTION": "YIB-NEFT-REFSTREAM2-Some Vendor-SBIN0007204-Vendor-STATE BANK OF INDIA",
+            "TXN DATE": "22-Jul-2026",
+            "DEBITS": "1000",
+            "CREDITS": "",
+            "BUSINESS UNIT": "Casa Romana",
+            "source_sheet": "YES AH IDW 2457",
+        }
+    ]
+
+    with patch(
+        "app.services.automation_engine.sheets_client.get_column_values", return_value=set()
+    ), patch(
+        "app.services.automation_engine.classifier.master_repository.find_party_candidates",
+        return_value=[],
+    ), patch(
+        "app.services.automation_engine.master_repository.clear_cache"
+    ), patch(
+        "app.services.automation_engine.ref_code.get_next_ref_code", return_value=1
+    ), patch(
+        "app.services.automation_engine.override_rules_repository.list_active", return_value=[]
+    ), patch(
+        "app.services.automation_engine.sheets_client.append_records"
+    ), patch(
+        "app.services.automation_engine.sheets_client.count_data_rows", return_value=0
+    ), patch(
+        "app.services.automation_engine.master_repository.list_tds_descriptions", return_value=[]
+    ), patch(
+        "app.services.automation_engine._attach_no_match_dropdowns",
         side_effect=RuntimeError("quota exceeded"),
     ), patch(
         "app.services.automation_engine.ledger_repository.log_audit"

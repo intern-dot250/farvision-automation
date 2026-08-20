@@ -18,6 +18,8 @@ class ClassificationResult:
     counterparty_account: str | None = None  # destination account number for TPT-shaped internal transfers
     account_head_ambiguous: bool = False  # this payee matched 2+ Master rows with no confident auto-pick - matched_master_row is a placeholder, needs an in-sheet dropdown
     account_head_candidates: list[dict] | None = None  # deduped candidate rows, only set when account_head_ambiguous - used to build the dropdown
+    no_match_dropdown_options: list[str] | None = None  # trusted head has a known Parent Account Head mapping but no payee name could be extracted at all - offers every Master payee under that Parent Account Head as a dropdown instead of silently writing a placeholder
+    no_match_parent_account_head: str | None = None  # the mapped Parent Account Head value to pre-fill when no_match_dropdown_options is set - every option in that dropdown shares this same value, so it's already correct regardless of which one gets picked
 
 
 def _derive_head(master_row: dict) -> str:
@@ -89,6 +91,19 @@ def _extract_fallback_payee(description: str) -> str | None:
     clean = re.sub(r"\s*[-–]\s*\d{8,}", "", desc).strip()
     clean = re.sub(r"\s+", " ", clean)
     return clean or None
+
+
+# Maps a trusted "Head" label from the bank statement (normalized lowercase)
+# to the real Master Parent Account Head value to offer as a category
+# dropdown when that head has no extractable payee name at all (e.g. an IMPS
+# narration truncated to just the counterparty bank name, "STATE BANK OF I").
+# Deliberately starts with only the one confirmed case - other head labels
+# (Vendor, Contractor, Imprest, ...) keep today's silent-placeholder
+# behavior until a real unresolvable case for them is confirmed the same
+# way this one was, rather than guessing a mapping upfront.
+_HEAD_TO_PARENT_ACCOUNT_HEAD = {
+    "salary site": "SALARY PAYABLE",
+}
 
 
 _GENERIC_PAYEE_LABELS = {
@@ -217,6 +232,16 @@ def classify_transaction(
             payee_name, company, candidates, context_text=context_text, history=history
         )
 
+        no_match_dropdown_options = None
+        no_match_parent_account_head = None
+        if resolved.row is None and resolved.reason == "no_match":
+            mapped_parent = _HEAD_TO_PARENT_ACCOUNT_HEAD.get(trusted_head.strip().lower())
+            if mapped_parent:
+                options = master_repository.list_payees_by_parent_account_head(mapped_parent, company=company)
+                if options:
+                    no_match_dropdown_options = options
+                    no_match_parent_account_head = mapped_parent
+
         return ClassificationResult(
             is_internal=False,
             head=trusted_head,
@@ -226,6 +251,8 @@ def classify_transaction(
             bank_name=parsed.bank_name,
             account_head_ambiguous=resolved.ambiguous,
             account_head_candidates=resolved.candidates if resolved.ambiguous else None,
+            no_match_dropdown_options=no_match_dropdown_options,
+            no_match_parent_account_head=no_match_parent_account_head,
         )
 
     if parsed.is_internal_format:

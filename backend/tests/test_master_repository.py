@@ -374,6 +374,52 @@ def test_list_tds_descriptions_returns_empty_list_when_columns_missing(monkeypat
     assert master_repository.list_tds_descriptions() == []
 
 
+def test_list_payees_by_parent_account_head_returns_sorted_deduped_payees(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [
+            {"Company": "DPL", "Account Head": "Bharat Singh(406)", "Parent Account Head": "SALARY PAYABLE"},
+            {"Company": "DPL", "Account Head": "Ashish Gaur(157)", "Parent Account Head": "SALARY PAYABLE"},
+            {"Company": "DPL", "Account Head": "Bharat Singh(406)", "Parent Account Head": "SALARY PAYABLE"},
+            {"Company": "DPL", "Account Head": "Some Vendor", "Parent Account Head": "SUNDRY CREDITORS - OTHER"},
+        ]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    result = master_repository.list_payees_by_parent_account_head("SALARY PAYABLE", company="DPL")
+
+    assert result == ["Ashish Gaur(157)", "Bharat Singh(406)"]
+
+
+def test_list_payees_by_parent_account_head_scoped_by_company(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [
+            {"Company": "DPL", "Account Head": "DPL Employee", "Parent Account Head": "SALARY PAYABLE"},
+            {"Company": "AMB", "Account Head": "AMB Employee", "Parent Account Head": "SALARY PAYABLE"},
+        ]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    result = master_repository.list_payees_by_parent_account_head("SALARY PAYABLE", company="DPL")
+
+    assert result == ["DPL Employee"]
+
+
+def test_list_payees_by_parent_account_head_returns_empty_for_no_match(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [{"Company": "DPL", "Account Head": "Some Vendor", "Parent Account Head": "SUNDRY CREDITORS - OTHER"}]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    assert master_repository.list_payees_by_parent_account_head("SALARY PAYABLE", company="DPL") == []
+
+
+def test_list_payees_by_parent_account_head_returns_empty_when_columns_missing(monkeypatch):
+    df = pd.DataFrame.from_records([{"Company": "DPL"}])
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    assert master_repository.list_payees_by_parent_account_head("SALARY PAYABLE", company="DPL") == []
+
+
 def test_find_party_candidates_returns_all_matching_rows(monkeypatch):
     df = pd.DataFrame.from_records(
         [

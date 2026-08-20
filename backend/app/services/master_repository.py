@@ -468,6 +468,36 @@ def list_tds_descriptions() -> list[str]:
     return sorted(descriptions)
 
 
+def list_payees_by_parent_account_head(parent_account_head: str, company: str | None = "DPL") -> list[str]:
+    """Every distinct Account Head value Master has on file for an exact
+    Parent Account Head (e.g. every Salary payee, Parent Account Head ==
+    "SALARY PAYABLE") - the option list for a category dropdown when a
+    transaction's trusted head (e.g. "Salary Site") is known but no payee
+    name could be extracted from the narration at all, so there's no name
+    to look up candidates for in the first place. Company-scoped the same
+    way as find_party/find_party_candidates - Master mixes two companies'
+    charts of accounts under the same Parent Account Head values."""
+    df = _load_master_df()
+    if "Account Head" not in df.columns or "Parent Account Head" not in df.columns:
+        return []
+
+    company_mask = None
+    if company and "Company" in df.columns:
+        company_mask = df["Company"].astype(str).str.strip().str.upper() == company.strip().upper()
+
+    key = _normalize(parent_account_head)
+    normalized_parent = _normalized_column("Parent Account Head")
+    if normalized_parent is None:
+        return []
+    match_mask = normalized_parent == key
+    if company_mask is not None:
+        match_mask = match_mask & company_mask
+
+    matches = df[match_mask]
+    payees = {str(value).strip() for value in matches["Account Head"] if str(value).strip()}
+    return sorted(payees)
+
+
 def clear_cache() -> None:
     """Force the next lookup to re-fetch Master from Sheets (e.g. after edits)."""
     _load_master_df.cache_clear()

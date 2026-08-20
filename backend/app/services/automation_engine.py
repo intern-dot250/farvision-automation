@@ -334,7 +334,18 @@ def _build_receipt_payment_rows(txn: TransactionRowSet, link_ref_code: int) -> d
     # real matched Master row - falling back to the generic trusted head
     # here previously let literal "Vendor"/"Contractor" strings leak into
     # Parent Account Head whenever no Master row matched at all.
-    parent_account_head = matched.get("Parent Account Head") or ""
+    #
+    # The one exception: txn.classification.no_match_parent_account_head is
+    # set only when the trusted head has a known category mapping (see
+    # classifier._HEAD_TO_PARENT_ACCOUNT_HEAD, e.g. "Salary Site" ->
+    # "SALARY PAYABLE") and no payee name could be extracted at all - every
+    # option in the dropdown _attach_no_match_dropdowns() attaches below
+    # shares that exact Parent Account Head, so it's already correct
+    # regardless of which one a human ends up picking, unlike the generic
+    # head string this guards against above.
+    parent_account_head = (
+        matched.get("Parent Account Head") or txn.classification.no_match_parent_account_head or ""
+    )
 
     return {
         "ReceiptPayment": [
@@ -1042,6 +1053,101 @@ def _attach_ambiguous_dropdowns(transactions: list[TransactionRowSet], settings,
                     )
 
 
+_NO_MATCH_ACCOUNT_HEAD_NOTE = (
+    "No payee name could be found in the source narration for this "
+    "transaction. Pick the real payee from the dropdown - Parent Account "
+    "Head is already correct and does not need to change."
+)
+
+
+def _attach_no_match_dropdowns(transactions: list[TransactionRowSet], settings, run_id: str) -> None:
+    """After a real (non-dry-run) write, attach an in-sheet dropdown to the
+    Account Head cell of every transaction whose trusted head has a known
+    category mapping (classifier._HEAD_TO_PARENT_ACCOUNT_HEAD) but no payee
+    name could be extracted from the narration at all - a different
+    situation from _attach_ambiguous_dropdowns (multiple Master candidates
+    for a known name): here there's no name to look up in the first place,
+    so the dropdown instead offers every Master payee under that same
+    Parent Account Head (classification.no_match_dropdown_options).
+
+    No formula is needed here (unlike the synthesized-label branch of
+    _attach_ambiguous_dropdowns) - every option in this dropdown shares the
+    exact same Parent Account Head by construction, and
+    _build_receipt_payment_rows already wrote it directly, so it's already
+    correct regardless of which option ends up picked.
+
+    Same compulsory-but-non-blocking shape as _attach_ambiguous_dropdowns: a
+    transient failure is retried once, a final failure is logged loudly, and
+    nothing here may ever block or fail the actual data write, which has
+    already happened by the time this runs.
+    """
+    for txn in transactions:
+        options = txn.classification.no_match_dropdown_options
+        if not options or txn.destination != "receipt_payment" or not txn.rows:
+            continue
+
+        ledger_rows = txn.rows.get("LedgerDetails") or []
+        link_ref_code = ledger_rows[0].get("Link Ref Code") if ledger_rows else None
+        if link_ref_code is None:
+            continue
+
+        try:
+            row_number = sheets_client.find_row_number(
+                settings.RECEIPT_PAYMENT_SHEET_ID, "LedgerDetails", "Link Ref Code", link_ref_code
+            )
+        except Exception as exc:
+            logger.error(
+                f"[{run_id}] Failed to locate written LedgerDetails row for SL#{txn.sl_no} "
+                f"(Link Ref Code={link_ref_code}) - dropdown not attached: {exc}"
+            )
+            ledger_repository.log_audit(
+                run_id, "error", f"Failed to locate written LedgerDetails row for SL#{txn.sl_no}",
+                {"reference": txn.reference, "error": str(exc)},
+            )
+            continue
+        if row_number is None:
+            logger.error(
+                f"[{run_id}] Could not locate written LedgerDetails row for SL#{txn.sl_no} "
+                f"(Link Ref Code={link_ref_code}) - dropdown not attached"
+            )
+            continue
+
+        for attempt in (1, 2):
+            try:
+                sheets_client.add_dropdown_validation(
+                    settings.RECEIPT_PAYMENT_SHEET_ID, "LedgerDetails", row_number, "Account Head", options
+                )
+                break
+            except Exception as exc:
+                if attempt < 2:
+                    continue
+                logger.error(
+                    f"[{run_id}] Failed to attach no-match Account Head dropdown for SL#{txn.sl_no}: {exc}"
+                )
+                ledger_repository.log_audit(
+                    run_id, "error", f"Failed to attach no-match Account Head dropdown for SL#{txn.sl_no}",
+                    {"reference": txn.reference, "error": str(exc)},
+                )
+
+        for attempt in (1, 2):
+            try:
+                sheets_client.add_cell_note(
+                    settings.RECEIPT_PAYMENT_SHEET_ID, "LedgerDetails", row_number, "Account Head",
+                    _NO_MATCH_ACCOUNT_HEAD_NOTE,
+                )
+                break
+            except Exception as exc:
+                if attempt < 2:
+                    continue
+                logger.error(
+                    f"[{run_id}] Failed to attach no-match Account Head note for SL#{txn.sl_no}: {exc}"
+                )
+                ledger_repository.log_audit(
+                    run_id, "error", f"Failed to attach no-match Account Head note for SL#{txn.sl_no}",
+                    {"reference": txn.reference, "error": str(exc)},
+                )
+
+
 def _attach_tax_info_description_dropdowns(
     import_tax_info_rows: list[dict], start_row: int, settings, run_id: str
 ) -> None:
@@ -1191,6 +1297,13 @@ def _run_automation_stream_body(dry_run: bool, rows: list[dict] | None, run_id: 
             logger.error(f"[{run_id}] Attaching ambiguous Account Head dropdowns failed: {exc}")
             ledger_repository.log_audit(
                 run_id, "error", "Attaching ambiguous Account Head dropdowns failed", {"error": str(exc)}
+            )
+        try:
+            _attach_no_match_dropdowns(transactions, settings, run_id)
+        except Exception as exc:
+            logger.error(f"[{run_id}] Attaching no-match Account Head dropdowns failed: {exc}")
+            ledger_repository.log_audit(
+                run_id, "error", "Attaching no-match Account Head dropdowns failed", {"error": str(exc)}
             )
 
     result = RunResult(

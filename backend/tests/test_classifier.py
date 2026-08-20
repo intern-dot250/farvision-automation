@@ -131,6 +131,64 @@ def test_existing_head_with_no_master_match_still_routes_without_review():
     assert result.head == "Vendor"
     assert result.needs_review is False
     assert result.matched_master_row is None
+    # "Vendor" has no entry in _HEAD_TO_PARENT_ACCOUNT_HEAD - regression
+    # guard that an unmapped trusted head keeps today's silent-placeholder
+    # behavior (no dropdown fabricated for a head we haven't confirmed).
+    assert result.no_match_dropdown_options is None
+    assert result.no_match_parent_account_head is None
+
+
+def test_salary_site_with_no_master_match_offers_category_dropdown():
+    # "Salary Site" is mapped to "SALARY PAYABLE" - when no payee name can
+    # be matched in Master at all (e.g. an IMPS narration truncated to just
+    # the counterparty bank name), offer every Master Salary payee as a
+    # dropdown instead of silently writing a placeholder into Account Head.
+    with patch("app.services.classifier.master_repository.find_party_candidates", return_value=[]), patch(
+        "app.services.classifier.master_repository.list_payees_by_parent_account_head"
+    ) as mock_list:
+        mock_list.return_value = ["Ashish Gaur(157)", "Bharat Singh(406)"]
+
+        result = classify_transaction(
+            "IMPS PC421336836917248/STATE BANK OF I/", existing_head="Salary Site"
+        )
+
+    mock_list.assert_called_once_with("SALARY PAYABLE", company="DPL")
+    assert result.is_internal is False
+    assert result.head == "Salary Site"
+    assert result.needs_review is False
+    assert result.matched_master_row is None
+    assert result.no_match_dropdown_options == ["Ashish Gaur(157)", "Bharat Singh(406)"]
+    assert result.no_match_parent_account_head == "SALARY PAYABLE"
+
+
+def test_salary_site_with_no_master_match_and_no_master_payees_leaves_dropdown_unset():
+    # Master has zero SALARY PAYABLE rows for this company - nothing to
+    # offer, so both new fields stay None (same as the unmapped-head case).
+    with patch("app.services.classifier.master_repository.find_party_candidates", return_value=[]), patch(
+        "app.services.classifier.master_repository.list_payees_by_parent_account_head", return_value=[]
+    ):
+        result = classify_transaction(
+            "IMPS PC421336836917248/STATE BANK OF I/", existing_head="Salary Site"
+        )
+
+    assert result.no_match_dropdown_options is None
+    assert result.no_match_parent_account_head is None
+
+
+def test_salary_site_with_master_match_does_not_offer_no_match_dropdown():
+    # A real Master match takes the normal path entirely - the no-match
+    # dropdown fields must never be set alongside a genuine match.
+    with patch("app.services.classifier.master_repository.find_party_candidates") as mock_find:
+        mock_find.return_value = [{
+            "Account Head": "Bharat Singh(406)",
+            "Parent Account Head": "SALARY PAYABLE",
+        }]
+
+        result = classify_transaction("Bharat Singh(406)", existing_head="Salary Site")
+
+    assert result.matched_master_row is not None
+    assert result.no_match_dropdown_options is None
+    assert result.no_match_parent_account_head is None
 
 
 # --- Fallback payee extraction (plain-name descriptions) ---
