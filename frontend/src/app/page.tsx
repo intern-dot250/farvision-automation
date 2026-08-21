@@ -293,14 +293,14 @@ export default function DashboardPage() {
           <div className="flex flex-wrap gap-2">
             <button
               onClick={() => handleRun(true)}
-              disabled={running || !file}
+              disabled={running || !file || sheetOptionsLoading}
               className="w-fit rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
             >
               {running ? "Processing..." : "Preview Upload"}
             </button>
             <button
               onClick={() => handleRun(false)}
-              disabled={running || !file}
+              disabled={running || !file || sheetOptionsLoading}
               className="w-fit rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700 disabled:opacity-50 dark:bg-emerald-500 dark:hover:bg-emerald-600"
             >
               {running ? "Processing..." : "Write to Google Sheets"}
