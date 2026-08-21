@@ -135,6 +135,34 @@ def test_canonical_does_not_merge_unrelated_names():
     assert _canonical(_normalize("SN LTD")) != _canonical(_normalize("RN LTD"))
 
 
+def test_canonical_strips_leading_ms_prefix():
+    # Master frequently prefixes an Account Head with "M/S " (47 such rows
+    # confirmed live, e.g. "M/S A N FILLING STATION") while the bank
+    # narration for the same vendor never includes it.
+    assert _canonical(_normalize("A N Filling Station")) == _canonical(_normalize("M/S A N FILLING STATION"))
+    assert _canonical(_normalize("M/S. Kamal Renu Credit")) == _canonical(_normalize("Kamal Renu Credit"))
+
+
+def test_canonical_does_not_strip_ms_mid_name():
+    # "M/S" must only be stripped as a leading prefix - never as a token
+    # appearing mid-name, which could otherwise merge unrelated entities.
+    assert _canonical(_normalize("Thomas M/S Enterprises")) != _canonical(_normalize("Thomas Enterprises"))
+
+
+def test_canonical_collapses_doubled_name():
+    # Bank narrations occasionally repeat a beneficiary's name twice back to
+    # back (e.g. "Shokeen Shokeen") where Master lists it once ("Shokeen").
+    assert _canonical(_normalize("Shokeen Shokeen")) == _canonical(_normalize("Shokeen"))
+    assert _canonical(_normalize("Ram Chand Ram Chand")) == _canonical(_normalize("Ram Chand"))
+
+
+def test_canonical_does_not_collapse_different_names():
+    # Only a byte-for-byte repeat of the full name collapses - a genuinely
+    # different second half must never be treated as a doubled repeat.
+    assert _canonical(_normalize("Ram Kishan Ram Kumar")) != _canonical(_normalize("Ram Kishan"))
+    assert _canonical(_normalize("Ram Kishan")) != _canonical(_normalize("Ram"))
+
+
 def test_find_party_matches_via_canonical_form(monkeypatch):
     df = pd.DataFrame.from_records(
         [
@@ -149,6 +177,19 @@ def test_find_party_matches_via_canonical_form(monkeypatch):
     assert master_repository.find_party("DK Plywood Pvt Ltd")["Payee Name"] == "D K PLYWOOD PVT LTD"
     assert master_repository.find_party("Prayag Polymers Limited")["Payee Name"] == "PRAYAG POLYMERS PVT LTD"
     assert master_repository.find_party("Totally Unrelated Company") is None
+
+
+def test_find_party_matches_ms_prefix_and_doubled_name(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [
+            {"Payee Name": "M/S A N FILLING STATION", "Account Head": "M/S A N FILLING STATION"},
+            {"Payee Name": "Shokeen", "Account Head": "Shokeen"},
+        ]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    assert master_repository.find_party("A N Filling Station")["Account Head"] == "M/S A N FILLING STATION"
+    assert master_repository.find_party("Shokeen Shokeen")["Account Head"] == "Shokeen"
 
 
 def test_resolve_company_matches_known_dpl_account_suffixes():

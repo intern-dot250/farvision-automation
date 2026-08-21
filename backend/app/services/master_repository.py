@@ -56,19 +56,47 @@ def _strip_master_suffix(name: str) -> str:
 
 _STANDALONE_PVT_RE = re.compile(r"\bPVT\b")
 
+# Master frequently prefixes a vendor's Account Head with "M/S " (Hindi/
+# Indian-English "Messrs" convention, e.g. "M/S A N FILLING STATION") while
+# the bank narration for the same vendor never includes it (confirmed: 47
+# such rows in Master as of 2026-08). Anchored to the start only - "M/S" is
+# always a prefix in this data, never a mid-name token, so this can't
+# collide with an unrelated name that happens to contain those letters.
+_STANDALONE_MS_PREFIX_RE = re.compile(r"^M/S\s+")
+
+
+def _collapse_doubled_name(name: str) -> str:
+    """Bank narrations occasionally repeat a beneficiary's name twice back
+    to back (e.g. "Shokeen Shokeen") where Master lists it once ("Shokeen").
+    Deterministic, not fuzzy: only collapses when the second half of the
+    (space-separated) name is a byte-for-byte repeat of the first half -
+    never a partial or approximate repeat, so "RAM KISHAN RAM KUMAR" is
+    left untouched."""
+    words = name.split()
+    half = len(words) // 2
+    if half and len(words) % 2 == 0 and words[:half] == words[half:]:
+        return " ".join(words[:half])
+    return name
+
 
 def _canonical(name: str) -> str:
     """A stricter equality form, checked only after the exact-normalized
-    comparison fails: drops the standalone "PVT" token and removes all
-    whitespace. Deterministic, well-known equivalences - not fuzzy matching:
+    comparison fails: drops the standalone "PVT" token, a leading "M/S "
+    prefix, a doubled-name repeat, and all remaining whitespace.
+    Deterministic, well-known equivalences - not fuzzy matching:
 
     - "SN LTD" == "S N LTD" (spacing on initials, e.g. "D K PLYWOOD PVT LTD")
     - "X LTD" == "X PVT LTD" ("Limited" only maps to "Ltd" by
       _LEGAL_SUFFIX_REPLACEMENTS, without inserting "Pvt", so a bank
       narration saying "Prayag Polymers Limited" wouldn't otherwise match
       Master's "PRAYAG POLYMERS PVT LTD")
+    - "A N FILLING STATION" == "M/S A N FILLING STATION"
+    - "SHOKEEN SHOKEEN" == "SHOKEEN"
     """
-    return re.sub(r"\s+", "", _STANDALONE_PVT_RE.sub("", name))
+    name = _STANDALONE_PVT_RE.sub("", name)
+    name = _STANDALONE_MS_PREFIX_RE.sub("", name)
+    name = _collapse_doubled_name(name)
+    return re.sub(r"\s+", "", name)
 
 
 def _digits_only(value: str) -> str:

@@ -2719,3 +2719,54 @@ def test_run_automation_stream_clears_master_cache_before_processing():
         list(engine_module.run_automation_stream(dry_run=True, rows=bank_rows))
 
     mock_clear.assert_called_once()
+
+
+def test_run_automation_stream_is_deterministic_for_identical_repeated_input():
+    # Re-uploading the same statement must classify every transaction
+    # identically both times - no hidden state (caches, mutable defaults,
+    # unseeded randomness) may cause a second pass over the same input to
+    # produce a different Account Head/Parent Account Head.
+    from app.services import automation_engine as engine_module
+
+    bank_rows = [
+        {
+            "SL#": "1",
+            "REFERENCE": "REF-DETERMINISM-1",
+            "DESCRIPTION": "YIB-NEFT-REFDET1-Mukesh Kumar-KVBL0004201-Contractor-KARUR VYSYA BANK",
+            "TXN DATE": "22-Jul-2026",
+            "DEBITS": "1000",
+            "CREDITS": "",
+            "BUSINESS UNIT": "Casa Romana",
+            "source_sheet": "YES AH IDW 2457",
+        }
+    ]
+    master_candidates = [{"Account Head": "MUKESH KUMAR", "Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS"}]
+
+    def run_once():
+        with patch(
+            "app.services.automation_engine.sheets_client.get_column_values", return_value=set()
+        ), patch(
+            "app.services.automation_engine.classifier.master_repository.find_party_candidates",
+            return_value=master_candidates,
+        ), patch(
+            "app.services.automation_engine.master_repository.clear_cache"
+        ), patch(
+            "app.services.automation_engine.ref_code.get_next_ref_code", return_value=1
+        ), patch(
+            "app.services.automation_engine.override_rules_repository.list_active", return_value=[]
+        ):
+            events = list(engine_module.run_automation_stream(dry_run=True, rows=bank_rows))
+        return next(e for e in events if e["type"] == "result")["result"]
+
+    first = run_once()
+    second = run_once()
+
+    assert first.routed_receipt_payment == second.routed_receipt_payment == 1
+    first_ledger = first.transactions[0].rows["LedgerDetails"][0]
+    second_ledger = second.transactions[0].rows["LedgerDetails"][0]
+    assert first_ledger["Account Head"] == second_ledger["Account Head"] == "MUKESH KUMAR"
+    assert (
+        first_ledger["Parent Account Head"]
+        == second_ledger["Parent Account Head"]
+        == "SUNDRY CREDITORS - CONTRACTORS"
+    )

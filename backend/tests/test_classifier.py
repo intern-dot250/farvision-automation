@@ -422,3 +422,44 @@ def test_ambiguous_beneficiary_history_tie_falls_through_not_forced():
         result = classify_transaction("RAJESH KUMAR", history=history)
 
     assert result.account_head_ambiguous is True
+
+
+# --- Determinism: same input must always produce the same classification ---
+
+
+def test_classify_transaction_is_deterministic_for_unique_match():
+    candidates = [{"Account Head": "MUKESH KUMAR", "Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS"}]
+    with patch("app.services.classifier.master_repository.find_party_candidates", return_value=candidates):
+        first = classify_transaction(
+            "YIB-NEFT-YESME62030018553-Mukesh Kumar-KVBL0004201-Contractor-KARUR VYSYA BANK"
+        )
+        second = classify_transaction(
+            "YIB-NEFT-YESME62030018553-Mukesh Kumar-KVBL0004201-Contractor-KARUR VYSYA BANK"
+        )
+
+    assert first == second
+
+
+def test_classify_transaction_is_deterministic_for_ambiguous_match():
+    candidates = [
+        {"Account Head": "RAJESH KUMAR", "Parent Account Head": "SUNDRY CREDITORS - OTHER"},
+        {"Account Head": "RAJESH KUMAR", "Parent Account Head": "GENERAL CATEGORY-FLATS"},
+    ]
+    with patch("app.services.classifier.master_repository.find_party_candidates", return_value=candidates):
+        first = classify_transaction("RAJESH KUMAR")
+        second = classify_transaction("RAJESH KUMAR")
+
+    assert first == second
+    assert first.account_head_ambiguous is True
+
+
+def test_classify_transaction_is_deterministic_for_no_match():
+    with patch("app.services.classifier.master_repository.find_party_candidates", return_value=[]):
+        first = classify_transaction(
+            "YIB-NEFT-YESME99999999999-Unknown Payee-SBIN0007204-STATE BANK OF INDIA"
+        )
+        second = classify_transaction(
+            "YIB-NEFT-YESME99999999999-Unknown Payee-SBIN0007204-STATE BANK OF INDIA"
+        )
+
+    assert first == second
