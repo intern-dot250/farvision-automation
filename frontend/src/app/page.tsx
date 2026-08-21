@@ -60,6 +60,16 @@ export default function DashboardPage() {
       .catch(() => {});
   }, []);
 
+  // Refresh the stats cards periodically while a run is in progress, not
+  // just once after the upload's promise resolves - so the numbers still
+  // update even if that one request stalls or the connection has trouble,
+  // instead of requiring a manual page reload to see them.
+  useEffect(() => {
+    if (!running) return;
+    const interval = setInterval(loadStats, 5000);
+    return () => clearInterval(interval);
+  }, [running]);
+
   const handleFileChange = (selected: File | null) => {
     setFile(selected);
     setResult(null);

@@ -943,40 +943,55 @@ def _attach_ambiguous_dropdowns(transactions: list[TransactionRowSet], settings,
     auto-update Parent Account Head to match whichever Account Head gets
     picked.
 
-    This step is compulsory for every ambiguous transaction, not
-    best-effort: a transient failure (e.g. a Sheets API hiccup) is retried
-    once, and a final failure is logged as an error - loudly, not swallowed
-    - while still never blocking or failing the actual data write, which has
-    already happened by the time this runs.
+    All row lookups and all dropdown/note/formula writes for every eligible
+    transaction are batched into one find_row_numbers_bulk() read and one
+    batch_apply_cell_flags() write, instead of several sequential Sheets API
+    calls per row - a large upload with dozens of ambiguous rows previously
+    took minutes this way, exceeding this project's serverless function time
+    limit (confirmed live via audit_log: a run with no completion logged at
+    all). This step is still compulsory, not best-effort: a failure is
+    logged as an error - loudly, not swallowed - while still never blocking
+    or failing the actual data write, which has already happened by the
+    time this runs.
     """
+    eligible = []
     for txn in transactions:
         candidates = txn.classification.account_head_candidates
         if not candidates or txn.destination != "receipt_payment" or not txn.rows:
             continue
-
         targets = account_head_resolver.dropdown_targets(candidates)
         if not targets:
             continue
-
         ledger_rows = txn.rows.get("LedgerDetails") or []
         link_ref_code = ledger_rows[0].get("Link Ref Code") if ledger_rows else None
         if link_ref_code is None:
             continue
+        synthesized = "Account Head" in targets and account_head_resolver.uses_synthesized_labels(candidates)
+        eligible.append((txn, targets, synthesized, link_ref_code))
 
-        try:
-            row_number = sheets_client.find_row_number(
-                settings.RECEIPT_PAYMENT_SHEET_ID, "LedgerDetails", "Link Ref Code", link_ref_code
-            )
-        except Exception as exc:
-            logger.error(
-                f"[{run_id}] Failed to locate written LedgerDetails row for SL#{txn.sl_no} "
-                f"(Link Ref Code={link_ref_code}) - dropdown not attached: {exc}"
-            )
-            ledger_repository.log_audit(
-                run_id, "error", f"Failed to locate written LedgerDetails row for SL#{txn.sl_no}",
-                {"reference": txn.reference, "error": str(exc)},
-            )
-            continue
+    if not eligible:
+        return
+
+    try:
+        row_by_lrc = sheets_client.find_row_numbers_bulk(
+            settings.RECEIPT_PAYMENT_SHEET_ID, "LedgerDetails", "Link Ref Code",
+            [lrc for _, _, _, lrc in eligible],
+        )
+    except Exception as exc:
+        logger.error(f"[{run_id}] Failed to locate written LedgerDetails rows - dropdowns not attached: {exc}")
+        ledger_repository.log_audit(
+            run_id, "error", "Failed to locate written LedgerDetails rows for ambiguous dropdowns",
+            {"error": str(exc)},
+        )
+        return
+
+    account_head_letter = sheets_client.column_letter_for(
+        settings.RECEIPT_PAYMENT_SHEET_ID, "LedgerDetails", "Account Head"
+    )
+
+    flags = []
+    for txn, targets, synthesized, link_ref_code in eligible:
+        row_number = row_by_lrc.get(str(link_ref_code).strip())
         if row_number is None:
             logger.error(
                 f"[{run_id}] Could not locate written LedgerDetails row for SL#{txn.sl_no} "
@@ -984,73 +999,35 @@ def _attach_ambiguous_dropdowns(transactions: list[TransactionRowSet], settings,
             )
             continue
 
-        for column, values in targets.items():
-            for attempt in (1, 2):
-                try:
-                    sheets_client.add_dropdown_validation(
-                        settings.RECEIPT_PAYMENT_SHEET_ID, "LedgerDetails", row_number, column, values
-                    )
-                    break
-                except Exception as exc:
-                    if attempt < 2:
-                        continue
-                    logger.error(
-                        f"[{run_id}] Failed to attach Account Head dropdown for SL#{txn.sl_no} "
-                        f"column={column!r}: {exc}"
-                    )
-                    ledger_repository.log_audit(
-                        run_id, "error", f"Failed to attach Account Head dropdown for SL#{txn.sl_no}",
-                        {"reference": txn.reference, "column": column, "error": str(exc)},
-                    )
-
-        synthesized = "Account Head" in targets and account_head_resolver.uses_synthesized_labels(candidates)
         note_text = _AMBIGUOUS_ACCOUNT_HEAD_NOTE_AUTO if synthesized else _AMBIGUOUS_ACCOUNT_HEAD_NOTE
+        for column, values in targets.items():
+            entry = {"row_number": row_number, "column": column, "dropdown_values": values}
+            if column == "Account Head":
+                entry["note_text"] = note_text
+            flags.append(entry)
 
-        for attempt in (1, 2):
-            try:
-                sheets_client.add_cell_note(
-                    settings.RECEIPT_PAYMENT_SHEET_ID, "LedgerDetails", row_number, "Account Head",
-                    note_text,
-                )
-                break
-            except Exception as exc:
-                if attempt < 2:
-                    continue
-                logger.error(
-                    f"[{run_id}] Failed to attach Account Head note for SL#{txn.sl_no}: {exc}"
-                )
-                ledger_repository.log_audit(
-                    run_id, "error", f"Failed to attach Account Head note for SL#{txn.sl_no}",
-                    {"reference": txn.reference, "error": str(exc)},
-                )
+        if synthesized and account_head_letter is not None:
+            formula = _PARENT_ACCOUNT_HEAD_FORMULA.format(
+                cell=f"{account_head_letter}{row_number}",
+                placeholder=account_head_resolver.NO_PARENT_HEAD_LABEL,
+            )
+            flags.append({"row_number": row_number, "column": "Parent Account Head", "formula": formula})
 
-        if synthesized:
-            for attempt in (1, 2):
-                try:
-                    account_head_letter = sheets_client.column_letter_for(
-                        settings.RECEIPT_PAYMENT_SHEET_ID, "LedgerDetails", "Account Head"
-                    )
-                    if account_head_letter is not None:
-                        formula = _PARENT_ACCOUNT_HEAD_FORMULA.format(
-                            cell=f"{account_head_letter}{row_number}",
-                            placeholder=account_head_resolver.NO_PARENT_HEAD_LABEL,
-                        )
-                        sheets_client.set_cell_formula(
-                            settings.RECEIPT_PAYMENT_SHEET_ID, "LedgerDetails", row_number,
-                            "Parent Account Head", formula,
-                        )
-                    break
-                except Exception as exc:
-                    if attempt < 2:
-                        continue
-                    logger.error(
-                        f"[{run_id}] Failed to attach Parent Account Head formula for SL#{txn.sl_no}: {exc}"
-                    )
-                    ledger_repository.log_audit(
-                        run_id, "error",
-                        f"Failed to attach Parent Account Head formula for SL#{txn.sl_no}",
-                        {"reference": txn.reference, "error": str(exc)},
-                    )
+    for attempt in (1, 2):
+        try:
+            sheets_client.batch_apply_cell_flags(settings.RECEIPT_PAYMENT_SHEET_ID, "LedgerDetails", flags)
+            break
+        except Exception as exc:
+            if attempt < 2:
+                continue
+            logger.error(
+                f"[{run_id}] Failed to attach ambiguous Account Head dropdowns/notes for "
+                f"{len(flags)} cell(s): {exc}"
+            )
+            ledger_repository.log_audit(
+                run_id, "error", "Failed to attach ambiguous Account Head dropdowns/notes",
+                {"cell_count": len(flags), "error": str(exc)},
+            )
 
 
 _NO_MATCH_ACCOUNT_HEAD_NOTE = (
@@ -1076,76 +1053,68 @@ def _attach_no_match_dropdowns(transactions: list[TransactionRowSet], settings, 
     _build_receipt_payment_rows already wrote it directly, so it's already
     correct regardless of which option ends up picked.
 
-    Same compulsory-but-non-blocking shape as _attach_ambiguous_dropdowns: a
-    transient failure is retried once, a final failure is logged loudly, and
-    nothing here may ever block or fail the actual data write, which has
-    already happened by the time this runs.
+    All row lookups and all dropdown/note writes for every eligible
+    transaction are batched into one find_row_numbers_bulk() read and one
+    batch_apply_cell_flags() write - same performance fix and same
+    compulsory-but-non-blocking shape as _attach_ambiguous_dropdowns above;
+    see that function's docstring for why this batching exists.
     """
+    eligible = []
     for txn in transactions:
         options = txn.classification.no_match_dropdown_options
         if not options or txn.destination != "receipt_payment" or not txn.rows:
             continue
-
         ledger_rows = txn.rows.get("LedgerDetails") or []
         link_ref_code = ledger_rows[0].get("Link Ref Code") if ledger_rows else None
         if link_ref_code is None:
             continue
+        eligible.append((txn, options, link_ref_code))
 
-        try:
-            row_number = sheets_client.find_row_number(
-                settings.RECEIPT_PAYMENT_SHEET_ID, "LedgerDetails", "Link Ref Code", link_ref_code
-            )
-        except Exception as exc:
-            logger.error(
-                f"[{run_id}] Failed to locate written LedgerDetails row for SL#{txn.sl_no} "
-                f"(Link Ref Code={link_ref_code}) - dropdown not attached: {exc}"
-            )
-            ledger_repository.log_audit(
-                run_id, "error", f"Failed to locate written LedgerDetails row for SL#{txn.sl_no}",
-                {"reference": txn.reference, "error": str(exc)},
-            )
-            continue
+    if not eligible:
+        return
+
+    try:
+        row_by_lrc = sheets_client.find_row_numbers_bulk(
+            settings.RECEIPT_PAYMENT_SHEET_ID, "LedgerDetails", "Link Ref Code",
+            [lrc for _, _, lrc in eligible],
+        )
+    except Exception as exc:
+        logger.error(f"[{run_id}] Failed to locate written LedgerDetails rows - dropdowns not attached: {exc}")
+        ledger_repository.log_audit(
+            run_id, "error", "Failed to locate written LedgerDetails rows for no-match dropdowns",
+            {"error": str(exc)},
+        )
+        return
+
+    flags = []
+    for txn, options, link_ref_code in eligible:
+        row_number = row_by_lrc.get(str(link_ref_code).strip())
         if row_number is None:
             logger.error(
                 f"[{run_id}] Could not locate written LedgerDetails row for SL#{txn.sl_no} "
                 f"(Link Ref Code={link_ref_code}) - dropdown not attached"
             )
             continue
+        flags.append({
+            "row_number": row_number, "column": "Account Head",
+            "dropdown_values": options, "note_text": _NO_MATCH_ACCOUNT_HEAD_NOTE,
+        })
 
-        for attempt in (1, 2):
-            try:
-                sheets_client.add_dropdown_validation(
-                    settings.RECEIPT_PAYMENT_SHEET_ID, "LedgerDetails", row_number, "Account Head", options
-                )
-                break
-            except Exception as exc:
-                if attempt < 2:
-                    continue
-                logger.error(
-                    f"[{run_id}] Failed to attach no-match Account Head dropdown for SL#{txn.sl_no}: {exc}"
-                )
-                ledger_repository.log_audit(
-                    run_id, "error", f"Failed to attach no-match Account Head dropdown for SL#{txn.sl_no}",
-                    {"reference": txn.reference, "error": str(exc)},
-                )
-
-        for attempt in (1, 2):
-            try:
-                sheets_client.add_cell_note(
-                    settings.RECEIPT_PAYMENT_SHEET_ID, "LedgerDetails", row_number, "Account Head",
-                    _NO_MATCH_ACCOUNT_HEAD_NOTE,
-                )
-                break
-            except Exception as exc:
-                if attempt < 2:
-                    continue
-                logger.error(
-                    f"[{run_id}] Failed to attach no-match Account Head note for SL#{txn.sl_no}: {exc}"
-                )
-                ledger_repository.log_audit(
-                    run_id, "error", f"Failed to attach no-match Account Head note for SL#{txn.sl_no}",
-                    {"reference": txn.reference, "error": str(exc)},
-                )
+    for attempt in (1, 2):
+        try:
+            sheets_client.batch_apply_cell_flags(settings.RECEIPT_PAYMENT_SHEET_ID, "LedgerDetails", flags)
+            break
+        except Exception as exc:
+            if attempt < 2:
+                continue
+            logger.error(
+                f"[{run_id}] Failed to attach no-match Account Head dropdowns/notes for "
+                f"{len(flags)} cell(s): {exc}"
+            )
+            ledger_repository.log_audit(
+                run_id, "error", "Failed to attach no-match Account Head dropdowns/notes",
+                {"cell_count": len(flags), "error": str(exc)},
+            )
 
 
 def _attach_tax_info_description_dropdowns(

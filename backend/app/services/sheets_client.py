@@ -259,6 +259,38 @@ def find_row_number(sheet_id: str, worksheet_name: str, column: str, value) -> i
     return None
 
 
+def find_row_numbers_bulk(sheet_id: str, worksheet_name: str, column: str, values: list) -> dict[str, int]:
+    """Like find_row_number(), but resolves many target values in a single
+    column read instead of one Sheets API read per value - used when a
+    post-write step needs to locate several already-written rows (e.g.
+    attaching a dropdown to every ambiguous transaction from the same run)
+    instead of looking each one up independently.
+
+    Returns {str(value): row_number} only for values actually found (last
+    matching row wins, same "search from the bottom" semantics as
+    find_row_number). Values not present in the column are simply absent
+    from the result - callers already handle a missing row the same way
+    find_row_number's None return is handled today.
+    """
+    if not values:
+        return {}
+    worksheet = get_worksheet(sheet_id, worksheet_name)
+    header = _get_header(sheet_id, worksheet_name, worksheet)
+    if column not in header:
+        return {}
+    col_index = header.index(column) + 1
+    col_values = worksheet.col_values(col_index)
+    wanted = {str(value).strip() for value in values}
+    found: dict[str, int] = {}
+    for i, cell in enumerate(col_values):
+        if i == 0:
+            continue  # header row
+        cell = cell.strip()
+        if cell in wanted:
+            found[cell] = i + 1  # last match wins - later rows overwrite earlier ones
+    return found
+
+
 def get_column_values(sheet_id: str, worksheet_name: str, column: str) -> set[str]:
     """Non-empty values in a named column (excluding the header), reading
     just that one column rather than the whole sheet. Returns an empty set
@@ -419,6 +451,89 @@ def add_cell_note(sheet_id: str, worksheet_name: str, row_number: int, column: s
         return
     letter = _column_letter(header.index(column) + 1)
     worksheet.insert_note(f"{letter}{row_number}", note_text)
+
+
+def batch_apply_cell_flags(sheet_id: str, worksheet_name: str, flags: list[dict]) -> None:
+    """Apply many dropdown-validation / note / formula cell writes in a
+    single Sheets API batch_update call, instead of one call per (row,
+    field) pair - used for the post-write "flag this row for review"
+    step (ambiguous/no-match Account Head dropdowns), which previously
+    issued 3-9 sequential API calls per flagged row. For a large upload
+    with dozens of flagged rows this took minutes, exceeding this
+    project's serverless function time limit (confirmed live via
+    audit_log: a run with no completion logged at all). Batching brings
+    the whole step down to one round trip regardless of row count -
+    same technique clear_all_tabs() already uses for its own
+    validation/note-clearing requests.
+
+    Each entry in `flags`: {"row_number": int, "column": str,
+    "dropdown_values": list[str] | None, "note_text": str | None,
+    "formula": str | None} - any of the three optional fields can be
+    combined for the same cell (e.g. a dropdown + a note together).
+    No-op (per entry) if `column` isn't a real header on this worksheet.
+    A malformed request anywhere in the batch fails the whole call
+    (Sheets API batchUpdate is all-or-nothing) - callers should treat
+    this the same "cosmetic, never blocks the real write" way the
+    previous per-row calls were already treated.
+    """
+    if not flags:
+        return
+    worksheet = get_worksheet(sheet_id, worksheet_name)
+    header = _get_header(sheet_id, worksheet_name, worksheet)
+    spreadsheet = open_sheet(sheet_id)
+
+    requests = []
+    for flag in flags:
+        column = flag["column"]
+        if column not in header:
+            continue
+        row_number = flag["row_number"]
+        col_index = header.index(column) + 1
+        cell_range = {
+            "sheetId": worksheet.id,
+            "startRowIndex": row_number - 1,
+            "endRowIndex": row_number,
+            "startColumnIndex": col_index - 1,
+            "endColumnIndex": col_index,
+        }
+
+        dropdown_values = flag.get("dropdown_values")
+        if dropdown_values:
+            requests.append({
+                "setDataValidation": {
+                    "range": cell_range,
+                    "rule": {
+                        "condition": {
+                            "type": ValidationConditionType.one_of_list.value,
+                            "values": [{"userEnteredValue": v} for v in dropdown_values],
+                        },
+                        "showCustomUi": True,
+                    },
+                }
+            })
+
+        note_text = flag.get("note_text")
+        if note_text:
+            requests.append({
+                "updateCells": {
+                    "range": cell_range,
+                    "fields": "note",
+                    "rows": [{"values": [{"note": note_text}]}],
+                }
+            })
+
+        formula = flag.get("formula")
+        if formula:
+            requests.append({
+                "updateCells": {
+                    "range": cell_range,
+                    "fields": "userEnteredValue",
+                    "rows": [{"values": [{"userEnteredValue": {"formulaValue": formula}}]}],
+                }
+            })
+
+    if requests:
+        spreadsheet.batch_update({"requests": requests})
 
 
 # Never cleared, regardless of which tab-name conventions a spreadsheet uses -

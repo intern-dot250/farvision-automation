@@ -8,6 +8,7 @@ from app.services.automation_engine import (
     _assign_rows,
     _attach_ambiguous_dropdowns,
     _attach_no_match_dropdowns,
+    _NO_MATCH_ACCOUNT_HEAD_NOTE,
     _attach_tax_info_description_dropdowns,
     _build_deposit_withdrawal_rows,
     _build_receipt_payment_rows,
@@ -1915,25 +1916,26 @@ def test_attach_ambiguous_dropdowns_calls_add_dropdown_for_every_ambiguous_trans
     txn = _ambiguous_txn(_CANDIDATES)
 
     with patch(
-        "app.services.automation_engine.sheets_client.find_row_number", return_value=5
-    ), patch(
-        "app.services.automation_engine.sheets_client.add_dropdown_validation"
-    ) as mock_add, patch(
-        "app.services.automation_engine.sheets_client.add_cell_note"
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk", return_value={"42": 5}
     ), patch(
         "app.services.automation_engine.sheets_client.column_letter_for", return_value="B"
     ), patch(
-        "app.services.automation_engine.sheets_client.set_cell_formula"
-    ):
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags"
+    ) as mock_batch:
         _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")
 
     # Account Head is the only field ever offered as a dropdown - synthesized
     # combined labels since these candidates share identical raw Account
     # Head text (see account_head_resolver.dropdown_targets).
-    mock_add.assert_called_once_with(
-        "rp-sheet-id", "LedgerDetails", 5, "Account Head",
-        ["RAJESH KUMAR (SUNDRY CREDITORS - OTHER)", "RAJESH KUMAR (GENERAL CATEGORY-FLATS)"],
-    )
+    mock_batch.assert_called_once()
+    args = mock_batch.call_args.args
+    assert args[:2] == ("rp-sheet-id", "LedgerDetails")
+    flags = args[2]
+    dropdown_flag = next(f for f in flags if f["column"] == "Account Head")
+    assert dropdown_flag["row_number"] == 5
+    assert dropdown_flag["dropdown_values"] == [
+        "RAJESH KUMAR (SUNDRY CREDITORS - OTHER)", "RAJESH KUMAR (GENERAL CATEGORY-FLATS)",
+    ]
 
 
 def test_attach_ambiguous_dropdowns_also_attaches_a_verification_note():
@@ -1943,22 +1945,18 @@ def test_attach_ambiguous_dropdowns_also_attaches_a_verification_note():
     txn = _ambiguous_txn(_CANDIDATES)
 
     with patch(
-        "app.services.automation_engine.sheets_client.find_row_number", return_value=5
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk", return_value={"42": 5}
     ), patch(
-        "app.services.automation_engine.sheets_client.add_dropdown_validation"
-    ), patch(
-        "app.services.automation_engine.sheets_client.add_cell_note"
-    ) as mock_note, patch(
         "app.services.automation_engine.sheets_client.column_letter_for", return_value="B"
     ), patch(
-        "app.services.automation_engine.sheets_client.set_cell_formula"
-    ):
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags"
+    ) as mock_batch:
         _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")
 
-    mock_note.assert_called_once()
-    args = mock_note.call_args.args
-    assert args[:4] == ("rp-sheet-id", "LedgerDetails", 5, "Account Head")
-    assert "Parent Account Head" in args[4]
+    flags = mock_batch.call_args.args[2]
+    dropdown_flag = next(f for f in flags if f["column"] == "Account Head")
+    assert dropdown_flag["row_number"] == 5
+    assert "Parent Account Head" in dropdown_flag["note_text"]
 
 
 def test_attach_ambiguous_dropdowns_writes_parent_account_head_formula_for_synthesized_labels():
@@ -1969,23 +1967,19 @@ def test_attach_ambiguous_dropdowns_writes_parent_account_head_formula_for_synth
     txn = _ambiguous_txn(_CANDIDATES)
 
     with patch(
-        "app.services.automation_engine.sheets_client.find_row_number", return_value=5
-    ), patch(
-        "app.services.automation_engine.sheets_client.add_dropdown_validation"
-    ), patch(
-        "app.services.automation_engine.sheets_client.add_cell_note"
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk", return_value={"42": 5}
     ), patch(
         "app.services.automation_engine.sheets_client.column_letter_for", return_value="B"
     ) as mock_letter, patch(
-        "app.services.automation_engine.sheets_client.set_cell_formula"
-    ) as mock_formula:
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags"
+    ) as mock_batch:
         _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")
 
     mock_letter.assert_called_once_with("rp-sheet-id", "LedgerDetails", "Account Head")
-    mock_formula.assert_called_once()
-    args = mock_formula.call_args.args
-    assert args[:4] == ("rp-sheet-id", "LedgerDetails", 5, "Parent Account Head")
-    formula = args[4]
+    flags = mock_batch.call_args.args[2]
+    formula_flag = next(f for f in flags if f["column"] == "Parent Account Head")
+    assert formula_flag["row_number"] == 5
+    formula = formula_flag["formula"]
     assert formula.startswith("=")
     assert "B5" in formula
 
@@ -2001,21 +1995,21 @@ def test_attach_ambiguous_dropdowns_does_not_write_formula_when_account_head_tex
     txn = _ambiguous_txn(candidates)
 
     with patch(
-        "app.services.automation_engine.sheets_client.find_row_number", return_value=5
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk", return_value={"42": 5}
     ), patch(
-        "app.services.automation_engine.sheets_client.add_dropdown_validation"
+        "app.services.automation_engine.sheets_client.column_letter_for", return_value="F"
     ), patch(
-        "app.services.automation_engine.sheets_client.add_cell_note"
-    ) as mock_note, patch(
-        "app.services.automation_engine.sheets_client.column_letter_for"
-    ) as mock_letter, patch(
-        "app.services.automation_engine.sheets_client.set_cell_formula"
-    ) as mock_formula:
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags"
+    ) as mock_batch:
         _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")
 
-    mock_letter.assert_not_called()
-    mock_formula.assert_not_called()
-    assert "not updated automatically" in mock_note.call_args.args[4]
+    # column_letter_for is now looked up once per batch regardless (cheap -
+    # served from the already-warm header cache, no extra Sheets API call),
+    # but no Parent Account Head formula should be written for this shape.
+    flags = mock_batch.call_args.args[2]
+    assert not any(f["column"] == "Parent Account Head" for f in flags)
+    dropdown_flag = next(f for f in flags if f["column"] == "Account Head")
+    assert "not updated automatically" in dropdown_flag["note_text"]
 
 
 def test_attach_ambiguous_dropdowns_skips_non_ambiguous_transactions():
@@ -2023,40 +2017,33 @@ def test_attach_ambiguous_dropdowns_skips_non_ambiguous_transactions():
     txn.rows = {"LedgerDetails": [{"Link Ref Code": 1}]}
 
     with patch(
-        "app.services.automation_engine.sheets_client.find_row_number"
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk"
     ) as mock_find, patch(
-        "app.services.automation_engine.sheets_client.add_dropdown_validation"
-    ) as mock_add, patch(
-        "app.services.automation_engine.sheets_client.add_cell_note"
-    ) as mock_note:
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags"
+    ) as mock_batch:
         _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")
 
     mock_find.assert_not_called()
-    mock_add.assert_not_called()
-    mock_note.assert_not_called()
+    mock_batch.assert_not_called()
 
 
 def test_attach_ambiguous_dropdowns_retries_once_then_logs_error_on_final_failure():
     txn = _ambiguous_txn(_CANDIDATES)
 
     with patch(
-        "app.services.automation_engine.sheets_client.find_row_number", return_value=5
-    ), patch(
-        "app.services.automation_engine.sheets_client.add_dropdown_validation",
-        side_effect=RuntimeError("Sheets API hiccup"),
-    ) as mock_add, patch(
-        "app.services.automation_engine.sheets_client.add_cell_note"
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk", return_value={"42": 5}
     ), patch(
         "app.services.automation_engine.sheets_client.column_letter_for", return_value="B"
     ), patch(
-        "app.services.automation_engine.sheets_client.set_cell_formula"
-    ), patch(
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags",
+        side_effect=RuntimeError("Sheets API hiccup"),
+    ) as mock_batch, patch(
         "app.services.automation_engine.ledger_repository.log_audit"
     ) as mock_log:
         _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")
 
     # Retried once (2 attempts total) before giving up.
-    assert mock_add.call_count == 2
+    assert mock_batch.call_count == 2
     mock_log.assert_called_once()
     assert mock_log.call_args.args[1] == "error"
 
@@ -2065,47 +2052,19 @@ def test_attach_ambiguous_dropdowns_recovers_on_retry():
     txn = _ambiguous_txn(_CANDIDATES)
 
     with patch(
-        "app.services.automation_engine.sheets_client.find_row_number", return_value=5
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk", return_value={"42": 5}
     ), patch(
-        "app.services.automation_engine.sheets_client.add_dropdown_validation",
+        "app.services.automation_engine.sheets_client.column_letter_for", return_value="B"
+    ), patch(
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags",
         side_effect=[RuntimeError("transient"), None],
-    ) as mock_add, patch(
-        "app.services.automation_engine.sheets_client.add_cell_note"
-    ), patch(
-        "app.services.automation_engine.sheets_client.column_letter_for", return_value="B"
-    ), patch(
-        "app.services.automation_engine.sheets_client.set_cell_formula"
-    ), patch(
+    ) as mock_batch, patch(
         "app.services.automation_engine.ledger_repository.log_audit"
     ) as mock_log:
         _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")
 
-    assert mock_add.call_count == 2
+    assert mock_batch.call_count == 2
     mock_log.assert_not_called()
-
-
-def test_attach_ambiguous_dropdowns_note_retries_once_then_logs_error_on_final_failure():
-    txn = _ambiguous_txn(_CANDIDATES)
-
-    with patch(
-        "app.services.automation_engine.sheets_client.find_row_number", return_value=5
-    ), patch(
-        "app.services.automation_engine.sheets_client.add_dropdown_validation"
-    ), patch(
-        "app.services.automation_engine.sheets_client.add_cell_note",
-        side_effect=RuntimeError("Sheets API hiccup"),
-    ) as mock_note, patch(
-        "app.services.automation_engine.sheets_client.column_letter_for", return_value="B"
-    ), patch(
-        "app.services.automation_engine.sheets_client.set_cell_formula"
-    ), patch(
-        "app.services.automation_engine.ledger_repository.log_audit"
-    ) as mock_log:
-        _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")
-
-    assert mock_note.call_count == 2
-    mock_log.assert_called_once()
-    assert mock_log.call_args.args[1] == "error"
 
 
 def test_attach_ambiguous_dropdowns_failure_never_raises():
@@ -2114,18 +2073,12 @@ def test_attach_ambiguous_dropdowns_failure_never_raises():
     txn = _ambiguous_txn(_CANDIDATES)
 
     with patch(
-        "app.services.automation_engine.sheets_client.find_row_number", return_value=5
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk", return_value={"42": 5}
     ), patch(
-        "app.services.automation_engine.sheets_client.add_dropdown_validation",
+        "app.services.automation_engine.sheets_client.column_letter_for", return_value="B"
+    ), patch(
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags",
         side_effect=RuntimeError("permanent failure"),
-    ), patch(
-        "app.services.automation_engine.sheets_client.add_cell_note",
-        side_effect=RuntimeError("permanent failure"),
-    ), patch(
-        "app.services.automation_engine.sheets_client.column_letter_for",
-        side_effect=RuntimeError("permanent failure"),
-    ), patch(
-        "app.services.automation_engine.sheets_client.set_cell_formula"
     ), patch(
         "app.services.automation_engine.ledger_repository.log_audit"
     ):
@@ -2136,39 +2089,36 @@ def test_attach_ambiguous_dropdowns_skips_when_row_not_found_and_logs_error():
     txn = _ambiguous_txn(_CANDIDATES)
 
     with patch(
-        "app.services.automation_engine.sheets_client.find_row_number", return_value=None
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk", return_value={}
     ), patch(
-        "app.services.automation_engine.sheets_client.add_dropdown_validation"
-    ) as mock_add, patch(
-        "app.services.automation_engine.sheets_client.add_cell_note"
-    ) as mock_note:
+        "app.services.automation_engine.sheets_client.column_letter_for", return_value="B"
+    ), patch(
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags"
+    ) as mock_batch:
         _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")
 
-    mock_add.assert_not_called()
-    mock_note.assert_not_called()
+    # No rows resolved -> nothing to flag, batch call made with an empty list.
+    mock_batch.assert_called_once_with("rp-sheet-id", "LedgerDetails", [])
 
 
 def test_attach_ambiguous_dropdowns_survives_find_row_number_failure():
-    # A transient Sheets API failure while locating the written row (e.g. a
+    # A transient Sheets API failure while locating the written rows (e.g. a
     # quota hiccup) must not raise out of this function - it's a cosmetic,
     # post-write step, and the docstring's "never blocking the write"
     # promise must hold even for this call, not just the retried ones below.
     txn = _ambiguous_txn(_CANDIDATES)
 
     with patch(
-        "app.services.automation_engine.sheets_client.find_row_number",
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk",
         side_effect=RuntimeError("quota exceeded"),
     ), patch(
-        "app.services.automation_engine.sheets_client.add_dropdown_validation"
-    ) as mock_add, patch(
-        "app.services.automation_engine.sheets_client.add_cell_note"
-    ) as mock_note, patch(
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags"
+    ) as mock_batch, patch(
         "app.services.automation_engine.ledger_repository.log_audit"
     ) as mock_log:
         _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")  # must not raise
 
-    mock_add.assert_not_called()
-    mock_note.assert_not_called()
+    mock_batch.assert_not_called()
     mock_log.assert_called_once()
     assert mock_log.call_args.args[1] == "error"
 
@@ -2204,16 +2154,18 @@ def test_attach_no_match_dropdowns_calls_add_dropdown_with_master_payee_list():
     txn = _no_match_txn(_NO_MATCH_OPTIONS)
 
     with patch(
-        "app.services.automation_engine.sheets_client.find_row_number", return_value=82
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk", return_value={"81": 82}
     ), patch(
-        "app.services.automation_engine.sheets_client.add_dropdown_validation"
-    ) as mock_add, patch(
-        "app.services.automation_engine.sheets_client.add_cell_note"
-    ):
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags"
+    ) as mock_batch:
         _attach_no_match_dropdowns([txn], _FakeSettings(), run_id="test-run")
 
-    mock_add.assert_called_once_with(
-        "rp-sheet-id", "LedgerDetails", 82, "Account Head", _NO_MATCH_OPTIONS
+    mock_batch.assert_called_once_with(
+        "rp-sheet-id", "LedgerDetails",
+        [{
+            "row_number": 82, "column": "Account Head",
+            "dropdown_values": _NO_MATCH_OPTIONS, "note_text": _NO_MATCH_ACCOUNT_HEAD_NOTE,
+        }],
     )
 
 
@@ -2221,17 +2173,16 @@ def test_attach_no_match_dropdowns_also_attaches_a_note():
     txn = _no_match_txn(_NO_MATCH_OPTIONS)
 
     with patch(
-        "app.services.automation_engine.sheets_client.find_row_number", return_value=82
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk", return_value={"81": 82}
     ), patch(
-        "app.services.automation_engine.sheets_client.add_dropdown_validation"
-    ), patch(
-        "app.services.automation_engine.sheets_client.add_cell_note"
-    ) as mock_note:
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags"
+    ) as mock_batch:
         _attach_no_match_dropdowns([txn], _FakeSettings(), run_id="test-run")
 
-    mock_note.assert_called_once()
-    args = mock_note.call_args.args
-    assert args[:4] == ("rp-sheet-id", "LedgerDetails", 82, "Account Head")
+    flags = mock_batch.call_args.args[2]
+    assert flags[0]["row_number"] == 82
+    assert flags[0]["column"] == "Account Head"
+    assert flags[0]["note_text"]
 
 
 def test_attach_no_match_dropdowns_never_writes_a_formula():
@@ -2241,41 +2192,35 @@ def test_attach_no_match_dropdowns_never_writes_a_formula():
     txn = _no_match_txn(_NO_MATCH_OPTIONS)
 
     with patch(
-        "app.services.automation_engine.sheets_client.find_row_number", return_value=82
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk", return_value={"81": 82}
     ), patch(
-        "app.services.automation_engine.sheets_client.add_dropdown_validation"
-    ), patch(
-        "app.services.automation_engine.sheets_client.add_cell_note"
-    ), patch(
-        "app.services.automation_engine.sheets_client.set_cell_formula"
-    ) as mock_formula, patch(
-        "app.services.automation_engine.sheets_client.column_letter_for"
-    ) as mock_letter:
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags"
+    ) as mock_batch:
         _attach_no_match_dropdowns([txn], _FakeSettings(), run_id="test-run")
 
-    mock_formula.assert_not_called()
-    mock_letter.assert_not_called()
+    flags = mock_batch.call_args.args[2]
+    assert all("formula" not in f for f in flags)
 
 
 def test_attach_no_match_dropdowns_skips_transactions_without_options():
     txn = _no_match_txn(None)
 
     with patch(
-        "app.services.automation_engine.sheets_client.find_row_number"
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk"
     ) as mock_find, patch(
-        "app.services.automation_engine.sheets_client.add_dropdown_validation"
-    ) as mock_add:
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags"
+    ) as mock_batch:
         _attach_no_match_dropdowns([txn], _FakeSettings(), run_id="test-run")
 
     mock_find.assert_not_called()
-    mock_add.assert_not_called()
+    mock_batch.assert_not_called()
 
 
 def test_attach_no_match_dropdowns_skips_deposit_withdrawal_destination():
     txn = _no_match_txn(_NO_MATCH_OPTIONS, destination="deposit_withdrawal")
 
     with patch(
-        "app.services.automation_engine.sheets_client.find_row_number"
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk"
     ) as mock_find:
         _attach_no_match_dropdowns([txn], _FakeSettings(), run_id="test-run")
 
@@ -2286,18 +2231,16 @@ def test_attach_no_match_dropdowns_retries_once_then_logs_error_on_final_failure
     txn = _no_match_txn(_NO_MATCH_OPTIONS)
 
     with patch(
-        "app.services.automation_engine.sheets_client.find_row_number", return_value=82
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk", return_value={"81": 82}
     ), patch(
-        "app.services.automation_engine.sheets_client.add_dropdown_validation",
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags",
         side_effect=RuntimeError("Sheets API hiccup"),
-    ) as mock_add, patch(
-        "app.services.automation_engine.sheets_client.add_cell_note"
-    ), patch(
+    ) as mock_batch, patch(
         "app.services.automation_engine.ledger_repository.log_audit"
     ) as mock_log:
         _attach_no_match_dropdowns([txn], _FakeSettings(), run_id="test-run")
 
-    assert mock_add.call_count == 2
+    assert mock_batch.call_count == 2
     mock_log.assert_called_once()
     assert mock_log.call_args.args[1] == "error"
 
@@ -2306,12 +2249,9 @@ def test_attach_no_match_dropdowns_failure_never_raises():
     txn = _no_match_txn(_NO_MATCH_OPTIONS)
 
     with patch(
-        "app.services.automation_engine.sheets_client.find_row_number", return_value=82
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk", return_value={"81": 82}
     ), patch(
-        "app.services.automation_engine.sheets_client.add_dropdown_validation",
-        side_effect=RuntimeError("boom"),
-    ), patch(
-        "app.services.automation_engine.sheets_client.add_cell_note",
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags",
         side_effect=RuntimeError("boom"),
     ), patch(
         "app.services.automation_engine.ledger_repository.log_audit"
@@ -2323,16 +2263,16 @@ def test_attach_no_match_dropdowns_survives_find_row_number_failure():
     txn = _no_match_txn(_NO_MATCH_OPTIONS)
 
     with patch(
-        "app.services.automation_engine.sheets_client.find_row_number",
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk",
         side_effect=RuntimeError("quota exceeded"),
     ), patch(
-        "app.services.automation_engine.sheets_client.add_dropdown_validation"
-    ) as mock_add, patch(
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags"
+    ) as mock_batch, patch(
         "app.services.automation_engine.ledger_repository.log_audit"
     ) as mock_log:
         _attach_no_match_dropdowns([txn], _FakeSettings(), run_id="test-run")  # must not raise
 
-    mock_add.assert_not_called()
+    mock_batch.assert_not_called()
     mock_log.assert_called_once()
     assert mock_log.call_args.args[1] == "error"
 

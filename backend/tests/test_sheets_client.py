@@ -299,6 +299,101 @@ def test_find_row_number_missing_column_returns_none(monkeypatch):
     assert sheets_client.find_row_number("sheet1", "LedgerDetails", "Link Ref Code", 3) is None
 
 
+def test_find_row_numbers_bulk_resolves_many_values_from_one_column_read(monkeypatch):
+    mock_ws = MagicMock()
+    mock_ws.row_values.return_value = ["Link Ref Code"]
+    mock_ws.col_values.return_value = ["Link Ref Code", "1", "2", "3", "4"]
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    result = sheets_client.find_row_numbers_bulk("sheet1", "LedgerDetails", "Link Ref Code", [2, 4, 99])
+
+    assert result == {"2": 3, "4": 5}
+    # One column read total, regardless of how many values were requested.
+    mock_ws.col_values.assert_called_once()
+
+
+def test_find_row_numbers_bulk_last_match_wins(monkeypatch):
+    mock_ws = MagicMock()
+    mock_ws.row_values.return_value = ["Link Ref Code"]
+    mock_ws.col_values.return_value = ["Link Ref Code", "5", "5", "5"]
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    result = sheets_client.find_row_numbers_bulk("sheet1", "LedgerDetails", "Link Ref Code", [5])
+
+    assert result == {"5": 4}
+
+
+def test_find_row_numbers_bulk_missing_column_returns_empty_dict(monkeypatch):
+    mock_ws = MagicMock()
+    mock_ws.row_values.return_value = ["Business Unit"]
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    assert sheets_client.find_row_numbers_bulk("sheet1", "LedgerDetails", "Link Ref Code", [1]) == {}
+
+
+def test_find_row_numbers_bulk_empty_values_returns_empty_dict_without_api_call(monkeypatch):
+    mock_ws = MagicMock()
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    assert sheets_client.find_row_numbers_bulk("sheet1", "LedgerDetails", "Link Ref Code", []) == {}
+    mock_ws.col_values.assert_not_called()
+
+
+def test_batch_apply_cell_flags_issues_one_batch_update_for_many_rows(monkeypatch):
+    mock_ws = MagicMock()
+    mock_ws.id = 123
+    mock_ws.row_values.return_value = ["Link Ref Code", "Account Head", "Parent Account Head"]
+    mock_spreadsheet = MagicMock()
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+    monkeypatch.setattr(sheets_client, "open_sheet", lambda sid: mock_spreadsheet)
+
+    sheets_client.batch_apply_cell_flags(
+        "sheet1", "LedgerDetails",
+        [
+            {"row_number": 5, "column": "Account Head", "dropdown_values": ["A", "B"], "note_text": "note1"},
+            {"row_number": 6, "column": "Account Head", "dropdown_values": ["C"], "note_text": "note2"},
+            {"row_number": 5, "column": "Parent Account Head", "formula": "=A1"},
+        ],
+    )
+
+    mock_spreadsheet.batch_update.assert_called_once()
+    requests = mock_spreadsheet.batch_update.call_args.args[0]["requests"]
+    # 2 dropdowns + 2 notes + 1 formula = 5 requests, all in a single call.
+    assert len(requests) == 5
+    validation_requests = [r for r in requests if "setDataValidation" in r]
+    note_requests = [r for r in requests if "updateCells" in r and r["updateCells"]["fields"] == "note"]
+    formula_requests = [r for r in requests if "updateCells" in r and r["updateCells"]["fields"] == "userEnteredValue"]
+    assert len(validation_requests) == 2
+    assert len(note_requests) == 2
+    assert len(formula_requests) == 1
+    assert formula_requests[0]["updateCells"]["rows"][0]["values"][0]["userEnteredValue"]["formulaValue"] == "=A1"
+
+
+def test_batch_apply_cell_flags_skips_unknown_column(monkeypatch):
+    mock_ws = MagicMock()
+    mock_ws.id = 123
+    mock_ws.row_values.return_value = ["Link Ref Code"]
+    mock_spreadsheet = MagicMock()
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+    monkeypatch.setattr(sheets_client, "open_sheet", lambda sid: mock_spreadsheet)
+
+    sheets_client.batch_apply_cell_flags(
+        "sheet1", "LedgerDetails",
+        [{"row_number": 5, "column": "Account Head", "dropdown_values": ["A"]}],
+    )
+
+    mock_spreadsheet.batch_update.assert_not_called()
+
+
+def test_batch_apply_cell_flags_empty_list_is_a_no_op(monkeypatch):
+    mock_spreadsheet = MagicMock()
+    monkeypatch.setattr(sheets_client, "open_sheet", lambda sid: mock_spreadsheet)
+
+    sheets_client.batch_apply_cell_flags("sheet1", "LedgerDetails", [])
+
+    mock_spreadsheet.batch_update.assert_not_called()
+
+
 def test_add_dropdown_validation_calls_gspread_with_correct_range(monkeypatch):
     mock_ws = MagicMock()
     mock_ws.row_values.return_value = ["Link Ref Code", "Account Head", "Parent Account Head"]

@@ -138,28 +138,57 @@ export async function runAutomationUploadStream(
   let buffer = "";
   let finalResult: RunResponse | null = null;
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  // Guards against a connection that stalls without ever closing cleanly or
+  // erroring (e.g. the backend's serverless function gets killed by its
+  // platform time limit mid-run) - reader.read() can hang indefinitely in
+  // that case, which previously left the dashboard on "Processing..."
+  // forever with no way to recover short of a manual page reload. If no new
+  // chunk arrives within this window, give up waiting and surface a clear
+  // message instead of hanging.
+  const STREAM_STALL_TIMEOUT_MS = 90_000;
+  const STALL_SENTINEL = Symbol("stream-stall");
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
+  try {
+    while (true) {
+      let timeoutId: ReturnType<typeof setTimeout>;
+      const outcome = await Promise.race([
+        reader.read(),
+        new Promise<typeof STALL_SENTINEL>((resolve) => {
+          timeoutId = setTimeout(() => resolve(STALL_SENTINEL), STREAM_STALL_TIMEOUT_MS);
+        }),
+      ]);
+      clearTimeout(timeoutId!);
+      if (outcome === STALL_SENTINEL) {
+        throw new ApiError(
+          504,
+          "This is taking longer than expected. It may still finish in the background - refresh the page in a minute to check status.",
+        );
+      }
+      const { done, value } = outcome;
+      if (done) break;
 
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      const event = JSON.parse(line);
-      if (event.type === "progress") {
-        onProgress({ stage: event.stage, processed: event.processed, total: event.total });
-      } else if (event.type === "result") {
-        finalResult = event as RunResponse;
-      } else if (event.type === "error") {
-        // The backend always yields this as its terminal event when the run
-        // fails for any reason - surface the real message rather than
-        // falling through to the generic "stream ended without a result".
-        throw new ApiError(500, event.message || "Automation run failed");
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const event = JSON.parse(line);
+        if (event.type === "progress") {
+          onProgress({ stage: event.stage, processed: event.processed, total: event.total });
+        } else if (event.type === "result") {
+          finalResult = event as RunResponse;
+        } else if (event.type === "error") {
+          // The backend always yields this as its terminal event when the run
+          // fails for any reason - surface the real message rather than
+          // falling through to the generic "stream ended without a result".
+          throw new ApiError(500, event.message || "Automation run failed");
+        }
       }
     }
+  } catch (err) {
+    reader.cancel().catch(() => {});
+    throw err;
   }
 
   if (buffer.trim()) {
