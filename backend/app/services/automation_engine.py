@@ -1133,9 +1133,15 @@ def _attach_tax_info_description_dropdowns(
     (TDS row + a deliberately blank row), so a search-from-bottom lookup
     would find the wrong one.
 
-    Same compulsory-but-non-blocking shape as _attach_ambiguous_dropdowns: a
-    transient failure is retried once, a final failure is logged loudly, and
-    nothing here can fail the run - the data write has already happened.
+    All eligible rows' dropdowns are batched into one Sheets API
+    batch_update call via sheets_client.batch_apply_cell_flags(), instead of
+    one add_dropdown_validation call per row - same performance fix as
+    _attach_ambiguous_dropdowns/_attach_no_match_dropdowns (see that
+    function's docstring for why: a large upload with many Contractor
+    payments previously took minutes here alone, exceeding this project's
+    serverless function time limit). Still compulsory-but-non-blocking: a
+    failure is logged loudly, and nothing here can fail the run - the data
+    write has already happened.
     """
     try:
         tds_descriptions = master_repository.list_tds_descriptions()
@@ -1149,28 +1155,31 @@ def _attach_tax_info_description_dropdowns(
     if not tds_descriptions:
         return
 
-    for offset, row in enumerate(import_tax_info_rows):
-        if row.get("Deduction Type") != "Tax deducted at source":
-            continue
-        row_number = start_row + offset
-        for attempt in (1, 2):
-            try:
-                sheets_client.add_dropdown_validation(
-                    settings.RECEIPT_PAYMENT_SHEET_ID, "ImportTaxInfo", row_number,
-                    "Description", tds_descriptions,
-                )
-                break
-            except Exception as exc:
-                if attempt < 2:
-                    continue
-                logger.error(
-                    f"[{run_id}] Failed to attach Description dropdown for ImportTaxInfo "
-                    f"row {row_number}: {exc}"
-                )
-                ledger_repository.log_audit(
-                    run_id, "error", f"Failed to attach Description dropdown for ImportTaxInfo row {row_number}",
-                    {"link_ref_code": row.get("Link Ref Code"), "error": str(exc)},
-                )
+    flags = [
+        {
+            "row_number": start_row + offset, "column": "Description",
+            "dropdown_values": tds_descriptions,
+        }
+        for offset, row in enumerate(import_tax_info_rows)
+        if row.get("Deduction Type") == "Tax deducted at source"
+    ]
+    if not flags:
+        return
+
+    for attempt in (1, 2):
+        try:
+            sheets_client.batch_apply_cell_flags(settings.RECEIPT_PAYMENT_SHEET_ID, "ImportTaxInfo", flags)
+            break
+        except Exception as exc:
+            if attempt < 2:
+                continue
+            logger.error(
+                f"[{run_id}] Failed to attach Description dropdowns for {len(flags)} ImportTaxInfo row(s): {exc}"
+            )
+            ledger_repository.log_audit(
+                run_id, "error", f"Failed to attach Description dropdowns for {len(flags)} ImportTaxInfo row(s)",
+                {"error": str(exc)},
+            )
 
 
 def _distinct_sheet_names(bank_rows: list[dict]) -> list[str]:
