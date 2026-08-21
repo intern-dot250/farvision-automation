@@ -151,6 +151,41 @@ def _positional_fallback_payee(description: str) -> str | None:
     return candidate
 
 
+_NARRATION_TO_RE = re.compile(r"To:\s*([^|]+)\|")
+
+
+def _extract_from_narration(narration: str | None) -> str | None:
+    """Last-resort extraction from the transaction's own display narration
+    (context_text) - parses the "To: <name> |" segment that automation_
+    engine's narration builder already produces from structured row fields
+    (not necessarily derivable from the raw DESCRIPTION alone). Confirmed
+    against live production data: some narrations correctly show a real
+    beneficiary (e.g. "To: Bharat Singh") even when every DESCRIPTION-based
+    extraction above finds nothing, because the narration's "To:" value can
+    come from a source column the DESCRIPTION-based heuristics never see.
+
+    Only ever consulted after every DESCRIPTION-based method has already
+    failed, so a row that already resolves correctly today is completely
+    unaffected. Applies the exact same rejection rules as
+    _positional_fallback_payee (generic labels, IFSC codes, bare digits,
+    RRN/PC-prefixed reference codes) plus a "contains a slash" check, so a
+    still-garbled "To: PC421336836917248/STATE BANK OF I/" value is
+    correctly rejected rather than fabricated into a fake name - those cases
+    genuinely have no recoverable payee in the source data.
+    """
+    if not narration:
+        return None
+    match = _NARRATION_TO_RE.search(narration)
+    if not match:
+        return None
+    candidate = match.group(1).strip()
+    if not candidate or "/" in candidate or candidate.upper() in _GENERIC_PAYEE_LABELS:
+        return None
+    if candidate.isdigit() or IFSC_PATTERN.match(candidate) or candidate.upper().startswith(("RRN", "PC")):
+        return None
+    return candidate
+
+
 def classify_transaction(
     description: str,
     existing_head: str | None = None,
@@ -193,6 +228,7 @@ def classify_transaction(
         parsed.payee_name
         or _extract_fallback_payee(description)
         or _positional_fallback_payee(description)
+        or _extract_from_narration(context_text)
         or parsed.bank_name
     )
     trusted_head = existing_head.strip() if existing_head else ""
@@ -237,7 +273,9 @@ def classify_transaction(
         if resolved.row is None and resolved.reason == "no_match":
             mapped_parent = _HEAD_TO_PARENT_ACCOUNT_HEAD.get(trusted_head.strip().lower())
             if mapped_parent:
-                options = master_repository.list_payees_by_parent_account_head(mapped_parent, company=company)
+                options = master_repository.list_payees_by_parent_account_head(
+                    mapped_parent, company=company, near_name=payee_name
+                )
                 if options:
                     no_match_dropdown_options = options
                     no_match_parent_account_head = mapped_parent

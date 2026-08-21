@@ -496,7 +496,9 @@ def list_tds_descriptions() -> list[str]:
     return sorted(descriptions)
 
 
-def list_payees_by_parent_account_head(parent_account_head: str, company: str | None = "DPL") -> list[str]:
+def list_payees_by_parent_account_head(
+    parent_account_head: str, company: str | None = "DPL", near_name: str | None = None
+) -> list[str]:
     """Every distinct Account Head value Master has on file for an exact
     Parent Account Head (e.g. every Salary payee, Parent Account Head ==
     "SALARY PAYABLE") - the option list for a category dropdown when a
@@ -504,7 +506,22 @@ def list_payees_by_parent_account_head(parent_account_head: str, company: str | 
     name could be extracted from the narration at all, so there's no name
     to look up candidates for in the first place. Company-scoped the same
     way as find_party/find_party_candidates - Master mixes two companies'
-    charts of accounts under the same Parent Account Head values."""
+    charts of accounts under the same Parent Account Head values.
+
+    ``near_name``, when given, sorts the result by descending fuzzy
+    closeness to it (ties broken alphabetically) instead of pure
+    alphabetical order - e.g. a garbled/typo'd extracted payee name like
+    "Balram Mishara" sorts the real "Balram Mishra(009)" near the top of
+    the dropdown instead of leaving it buried alphabetically among
+    hundreds of options. This never filters or hides any option - the
+    full real candidate list is always returned, and nothing is ever
+    auto-selected from it; confirmed unsafe to auto-pick even within this
+    narrower per-category pool, since Master has many genuinely distinct
+    employees with near-identical names distinguished only by an employee
+    code (e.g. two different "Jitendra Kumar Pandey" entries). Ranking
+    only ever changes *order*, so a human still always makes the final
+    call from the complete, real option list.
+    """
     df = _load_master_df()
     if "Account Head" not in df.columns or "Parent Account Head" not in df.columns:
         return []
@@ -523,6 +540,13 @@ def list_payees_by_parent_account_head(parent_account_head: str, company: str | 
 
     matches = df[match_mask]
     payees = {str(value).strip() for value in matches["Account Head"] if str(value).strip()}
+
+    if near_name:
+        near_key = _normalize(near_name)
+        return sorted(
+            payees,
+            key=lambda payee: (-difflib.SequenceMatcher(None, near_key, _normalize(payee)).ratio(), payee),
+        )
     return sorted(payees)
 
 

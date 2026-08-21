@@ -461,6 +461,38 @@ def test_list_payees_by_parent_account_head_returns_empty_when_columns_missing(m
     assert master_repository.list_payees_by_parent_account_head("SALARY PAYABLE", company="DPL") == []
 
 
+def test_list_payees_by_parent_account_head_near_name_ranks_by_closeness(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [
+            {"Company": "DPL", "Account Head": "Balram Mishra(009)", "Parent Account Head": "SALARY PAYABLE"},
+            {"Company": "DPL", "Account Head": "Zoravar Singh(200)", "Parent Account Head": "SALARY PAYABLE"},
+            {"Company": "DPL", "Account Head": "Amit Kumar(300)", "Parent Account Head": "SALARY PAYABLE"},
+        ]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    result = master_repository.list_payees_by_parent_account_head(
+        "SALARY PAYABLE", company="DPL", near_name="Balram Mishara"
+    )
+
+    assert result[0] == "Balram Mishra(009)"
+    assert set(result) == {"Balram Mishra(009)", "Zoravar Singh(200)", "Amit Kumar(300)"}
+
+
+def test_list_payees_by_parent_account_head_without_near_name_is_alphabetical(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [
+            {"Company": "DPL", "Account Head": "Zoravar Singh(200)", "Parent Account Head": "SALARY PAYABLE"},
+            {"Company": "DPL", "Account Head": "Amit Kumar(300)", "Parent Account Head": "SALARY PAYABLE"},
+        ]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    result = master_repository.list_payees_by_parent_account_head("SALARY PAYABLE", company="DPL")
+
+    assert result == ["Amit Kumar(300)", "Zoravar Singh(200)"]
+
+
 def test_find_party_candidates_returns_all_matching_rows(monkeypatch):
     df = pd.DataFrame.from_records(
         [

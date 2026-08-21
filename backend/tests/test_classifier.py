@@ -138,6 +138,58 @@ def test_existing_head_with_no_master_match_still_routes_without_review():
     assert result.no_match_parent_account_head is None
 
 
+def test_narration_fallback_recovers_payee_when_description_extraction_fails():
+    # A structured-prefix description with no findable IFSC/payee (falls
+    # through parsed.payee_name, _extract_fallback_payee, and
+    # _positional_fallback_payee) - but the transaction's own narration
+    # already correctly shows the real beneficiary, e.g. because it was
+    # built from a source column the description-based heuristics never see.
+    with patch("app.services.classifier.master_repository.find_party_candidates") as mock_find:
+        mock_find.return_value = [{
+            "Account Head": "Bharat Singh(406)",
+            "Parent Account Head": "SALARY PAYABLE",
+        }]
+
+        result = classify_transaction(
+            "NEFT-XXFINOPAYMENTSBANKXX",
+            existing_head="Salary Site",
+            context_text="Payment Disbursement (Purpose: Salary) | To: Bharat Singh | Ref: YESI66199007843200 | Head: Salary Site",
+        )
+
+    mock_find.assert_called_once_with("Bharat Singh", company="DPL")
+    assert result.payee_name == "Bharat Singh"
+    assert result.matched_master_row["Account Head"] == "Bharat Singh(406)"
+
+
+def test_narration_fallback_rejects_garbled_reference_shaped_text():
+    # A still-garbled "To: PC.../BANK NAME/" narration value must be
+    # rejected, not fabricated into a fake payee name - same as the
+    # STATE BANK OF I dead-end case confirmed live this session.
+    with patch("app.services.classifier.master_repository.find_party_candidates", return_value=[]):
+        result = classify_transaction(
+            "NEFT-UNRESOLVABLE-TEXT",
+            existing_head="Salary Site",
+            context_text="Payment Disbursement (Purpose: Salary) | To: PC421336836917248/STATE BANK OF I/ | Head: Salary Site",
+        )
+
+    assert result.payee_name != "PC421336836917248/STATE BANK OF I/"
+
+
+def test_narration_fallback_never_overrides_successful_description_extraction():
+    # Regression guard: a description that already resolves via an earlier
+    # extraction method must be completely unaffected, even if context_text
+    # contains a different "To: ..." value.
+    with patch("app.services.classifier.master_repository.find_party_candidates") as mock_find:
+        mock_find.return_value = [{"Account Head": "MUKESH KUMAR", "Parent Account Head": "SUNDRY CREDITORS - CONTRACTORS"}]
+
+        result = classify_transaction(
+            "YIB-NEFT-YESME62030018553-Mukesh Kumar-KVBL0004201-Contractor-KARUR VYSYA BANK",
+            context_text="Payment Disbursement (Purpose: Salary) | To: Someone Else | Head: Salary Site",
+        )
+
+    assert result.payee_name == "Mukesh Kumar"
+
+
 def test_salary_site_with_no_master_match_offers_category_dropdown():
     # "Salary Site" is mapped to "SALARY PAYABLE" - when no payee name can
     # be matched in Master at all (e.g. an IMPS narration truncated to just
@@ -152,7 +204,7 @@ def test_salary_site_with_no_master_match_offers_category_dropdown():
             "IMPS PC421336836917248/STATE BANK OF I/", existing_head="Salary Site"
         )
 
-    mock_list.assert_called_once_with("SALARY PAYABLE", company="DPL")
+    mock_list.assert_called_once_with("SALARY PAYABLE", company="DPL", near_name=result.payee_name)
     assert result.is_internal is False
     assert result.head == "Salary Site"
     assert result.needs_review is False
