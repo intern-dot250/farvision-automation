@@ -729,6 +729,126 @@ def test_find_party_fuzzy_no_match_for_unrelated_name(monkeypatch):
     assert master_repository.find_party_fuzzy("Aravali Height Resident Walfare Association") is None
 
 
+# --- find_party_loose_candidates: safe-by-uniqueness second fuzzy tier ---
+
+
+def test_find_party_loose_candidates_matches_real_om_steela_case(monkeypatch):
+    # Real production case: ratio 0.889, below the strict 0.92 threshold,
+    # but Master has exactly one plausible candidate.
+    df = pd.DataFrame.from_records(
+        [{"Payee Name": "OM STEELS", "Account Head": "OM STEELS", "Parent Account Head": "SUNDRY CREDITORS - OTHER"}]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    candidates = master_repository.find_party_loose_candidates("OM Steela")
+
+    assert len(candidates) == 1
+    assert candidates[0]["Account Head"] == "OM STEELS"
+
+
+def test_find_party_loose_candidates_matches_real_shree_ganesh_case_despite_missing_word(monkeypatch):
+    # Real production case: ratio 0.779, and a different word count
+    # ("Conts" abbreviates a whole missing word) - the strict tier's
+    # word-count-equality check would reject this even at a lower ratio.
+    df = pd.DataFrame.from_records(
+        [{
+            "Payee Name": "SHREE GANESH PLYWOOD AND CONSTRUCTION CHEMICALS",
+            "Account Head": "SHREE GANESH PLYWOOD AND CONSTRUCTION CHEMICALS",
+            "Parent Account Head": "SUNDRY CREDITORS - OTHER",
+        }]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    candidates = master_repository.find_party_loose_candidates("Shree Ganesh Plywood and Conts")
+
+    assert len(candidates) == 1
+
+
+def test_find_party_loose_candidates_never_auto_picks_when_multiple_real_entities_match(monkeypatch):
+    # Mirrors the genuinely-ambiguous "Sanjay Kumar" production case: two
+    # different real employees both clear the loose floor - must return
+    # both, never silently pick one.
+    df = pd.DataFrame.from_records(
+        [
+            {"Payee Name": "SANJAY KUMAR VERMA", "Account Head": "SANJAY KUMAR VERMA(011)", "Parent Account Head": "SALARY PAYABLE"},
+            {"Payee Name": "SANJAY KUMAR SINGH", "Account Head": "SANJAY KUMAR SINGH(088)", "Parent Account Head": "SALARY PAYABLE"},
+        ]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    candidates = master_repository.find_party_loose_candidates("Sanjay Kumar")
+
+    assert len(candidates) == 2
+
+
+def test_find_party_loose_candidates_refuses_below_floor(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [{"Payee Name": "TOTALLY DIFFERENT COMPANY", "Account Head": "TOTALLY DIFFERENT COMPANY", "Parent Account Head": "X"}]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    assert master_repository.find_party_loose_candidates("Aravali Height Resident Walfare Association") == []
+
+
+def test_find_party_loose_candidates_refuses_when_too_little_name_text(monkeypatch):
+    # A degenerate input that's essentially just a bare employee-code
+    # fragment (e.g. after a name gets fully stripped away upstream) must
+    # never enter loose matching, regardless of ratio - validated against
+    # real Master data to be the one realistic false-positive source.
+    df = pd.DataFrame.from_records(
+        [
+            {"Payee Name": "SOME EMPLOYEE - AH003893", "Account Head": "SOME EMPLOYEE - AH003893", "Parent Account Head": "SALARY PAYABLE"},
+            {"Payee Name": "OTHER EMPLOYEE - AH003689", "Account Head": "OTHER EMPLOYEE - AH003689", "Parent Account Head": "SALARY PAYABLE"},
+        ]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    assert master_repository.find_party_loose_candidates("- AH003893") == []
+    assert master_repository.find_party_loose_candidates("AB") == []
+
+
+def test_find_party_loose_candidates_scoped_by_company(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [{"Company": "AMB", "Payee Name": "OM STEELS", "Account Head": "OM STEELS", "Parent Account Head": "AMB VALUE"}]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    assert master_repository.find_party_loose_candidates("OM Steela", company="DPL") == []
+    result = master_repository.find_party_loose_candidates("OM Steela", company="AMB")
+    assert len(result) == 1
+
+
+def test_find_party_candidates_falls_back_to_loose_tier_when_strict_tier_finds_nothing(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [{"Payee Name": "OM STEELS", "Account Head": "OM STEELS", "Parent Account Head": "SUNDRY CREDITORS - OTHER"}]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    candidates = master_repository.find_party_candidates("OM Steela")
+
+    assert len(candidates) == 1
+    assert candidates[0]["Account Head"] == "OM STEELS"
+
+
+def test_find_party_candidates_prefers_strict_tier_over_loose_tier(monkeypatch):
+    # When the strict tier already finds something, the loose tier must
+    # never even be consulted - same "don't override a good match" contract
+    # find_party() already has for exact-vs-fuzzy.
+    df = pd.DataFrame.from_records(
+        [{
+            "Payee Name": "ARAVALI HEIGHT RESIDENT WELFARE ASSOCIATION",
+            "Account Head": "ARAVALI HEIGHT RESIDENT WELFARE ASSOCIATION",
+            "Parent Account Head": "STRICT TIER MATCH",
+        }]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    candidates = master_repository.find_party_candidates("Aravali Height Resident Walfare Association")
+
+    assert len(candidates) == 1
+    assert candidates[0]["Parent Account Head"] == "STRICT TIER MATCH"
+
+
 def test_find_deduction_for_head_returns_none_when_no_category_match(monkeypatch):
     df = pd.DataFrame.from_records(
         [

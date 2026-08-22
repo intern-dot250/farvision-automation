@@ -348,6 +348,97 @@ def find_party_fuzzy_candidates(payee_name: str | None, company: str | None = "D
     return []
 
 
+# Looser fuzzy floor, tried only when find_party_fuzzy_candidates() (the
+# strict tier: >= _FUZZY_MIN_RATIO AND same word count) finds nothing at
+# all. Safe by construction, not by threshold alone: callers only ever
+# auto-accept when find_party_loose_candidates() returns exactly one row.
+# Two or more rows (e.g. Master's genuinely distinct "Sanjay Kumar"
+# employees) are surfaced as ambiguous candidates for a dropdown, never
+# decided between - same "never guess" principle as the strict tier's
+# ambiguity margin, just triggered by candidate *count* instead of a ratio
+# gap. Confirmed real, safe examples that only clear this floor (all
+# single-candidate, all rejected by the strict tier): "OM Steela" -> Master's
+# "OM STEELS" (ratio 0.889); "Auro Chemical Industries Pvt Ltd" -> "AURO
+# CHEMICALS IND (P) LTD." (0.793); "Shree Ganesh Plywood and Conts" ->
+# "...AND CONSTRUCTION CHEMICALS" (0.779, also fails the strict tier's
+# word-count-equality check since "Conts" abbreviates a whole missing word).
+_FUZZY_LOOSE_MIN_RATIO = 0.75
+
+# Validated (2026-08-21) against 400 realistic single-typo/dropped-word
+# variants of real Master values: 96%+ true-positive rate among 1-candidate
+# auto-accepts. The one false positive found was degenerate, not a
+# near-miss between two real names - a mutation stripped an input down to
+# a bare trailing employee-code fragment ("- AH003893"), which then loosely
+# matched a different employee's unrelated code by digit-transposition
+# coincidence. A short input like that can't carry enough identity to
+# safely auto-match regardless of ratio, so require at least this many
+# alphabetic characters (ignoring any parenthesized/dashed trailing code -
+# see _strip_master_suffix) before even attempting the loose tier.
+_MIN_ALPHA_CHARS_FOR_LOOSE_MATCH = 4
+
+
+def find_party_loose_candidates(payee_name: str | None, company: str | None = "DPL") -> list[dict]:
+    """Second-tier fuzzy match, tried only after find_party_fuzzy_candidates()
+    finds nothing. No word-count-equality requirement (handles a missing
+    trailing word), and a lower similarity floor than the strict tier - but
+    never picks a "best" match: returns every Master row clearing the floor,
+    so a caller can only safely auto-accept when this returns exactly one
+    candidate (see module comment above _FUZZY_LOOSE_MIN_RATIO). Two or more
+    rows means Master has multiple real, similarly-named entities.
+
+    Returns []: below floor, no payee_name, too little real name text to
+    safely judge (see _MIN_ALPHA_CHARS_FOR_LOOSE_MATCH), or no Payee
+    Name/Account Head column to search.
+    """
+    if not payee_name:
+        return []
+
+    df = _load_master_df()
+    key = _normalize(payee_name)
+    if not key:
+        return []
+    alpha_chars = re.sub(r"[^A-Z]", "", _strip_master_suffix(key))
+    if len(alpha_chars) < _MIN_ALPHA_CHARS_FOR_LOOSE_MATCH:
+        return []
+
+    company_mask = None
+    if company and "Company" in df.columns:
+        company_mask = df["Company"].astype(str).str.strip().str.upper() == company.strip().upper()
+
+    for column in _LOOKUP_COLUMNS:
+        normalized = _normalized_column(column)
+        if normalized is None:
+            continue
+
+        scored: list[tuple[float, int]] = []
+        for idx, value in normalized.items():
+            if company_mask is not None and not company_mask.loc[idx]:
+                continue
+            if not value:
+                continue
+            ratio = difflib.SequenceMatcher(None, key, value).ratio()
+            if ratio >= _FUZZY_LOOSE_MIN_RATIO:
+                scored.append((ratio, idx))
+
+        if not scored:
+            continue
+
+        rows = [df.loc[idx].to_dict() for _, idx in scored]
+        if len(rows) == 1:
+            logger.info(
+                f"[master_repository] loose_fuzzy_match payee={payee_name!r} "
+                f"matched={rows[0].get(column)!r} ratio={scored[0][0]:.3f}"
+            )
+        else:
+            logger.info(
+                f"[master_repository] loose_fuzzy_match payee={payee_name!r} column={column!r} "
+                f"AMBIGUOUS {len(rows)} candidates clear floor {_FUZZY_LOOSE_MIN_RATIO} - never guessing"
+            )
+        return rows
+
+    return []
+
+
 def find_party_fuzzy(payee_name: str | None, company: str | None = "DPL") -> dict | None:
     """Single-result fuzzy match, kept for callers (e.g. find_party()) that
     only ever want one row or nothing. Implemented on top of
@@ -406,7 +497,16 @@ def find_party_candidates(payee_name: str | None, company: str | None = "DPL") -
     # account_head_resolver to flag and dropdown, instead of silently
     # collapsing to "no match" the way a bare find_party_fuzzy() -> None
     # would.
-    return find_party_fuzzy_candidates(payee_name, company=company)
+    strict_candidates = find_party_fuzzy_candidates(payee_name, company=company)
+    if strict_candidates:
+        return strict_candidates
+
+    # Strict tier found nothing - try the looser floor. account_head_resolver
+    # already handles 1 vs 2+ candidates correctly (unique_match auto-picks a
+    # single row; 2+ becomes an ambiguous dropdown, never auto-picked), so no
+    # special-casing is needed here - this just gives it a candidate list to
+    # work with instead of an empty one.
+    return find_party_loose_candidates(payee_name, company=company)
 
 
 def _category_rows(account_head: str | None, parent_account_head: str | None) -> pd.DataFrame:
