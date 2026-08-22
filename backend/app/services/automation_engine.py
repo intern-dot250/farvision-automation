@@ -1120,30 +1120,39 @@ def _attach_no_match_dropdowns(transactions: list[TransactionRowSet], settings, 
 _UNRESOLVED_ACCOUNT_HEAD_NOTE = (
     "Nothing could be automatically matched for this transaction - no payee "
     "name could be extracted and there is no known category to fall back "
-    "to. Describe it here manually and pick the correct category from the "
-    "Parent Account Head dropdown alongside it."
+    "to. Pick the real Account Head from the dropdown, and the correct "
+    "category from the Parent Account Head dropdown alongside it - Master "
+    "does not enforce that the pair you pick belongs together, so "
+    "double-check they make sense as a combination."
 )
+
+# Hidden helper tab (see sheets_client.get_or_create_worksheet/
+# sync_lookup_column) holding a same-spreadsheet mirror of Master's Account
+# Head list, one column per company - the source range for a "List from a
+# range" (ONE_OF_RANGE) dropdown. Needed because Account Head has ~7,800
+# distinct values per company (confirmed live), far past the ~500-value cap
+# Google Sheets enforces on an inline ONE_OF_LIST dropdown (confirmed live
+# via a real 400 error), and ONE_OF_RANGE's source range must live in the
+# same spreadsheet as the cell it validates - Master itself lives in a
+# different spreadsheet (STATEMENT_MASTER_SHEET_ID).
+_LOOKUP_WORKSHEET = "Lookup"
 
 
 def _attach_unresolved_full_dropdowns(transactions: list[TransactionRowSet], settings, run_id: str) -> None:
-    """After a real (non-dry-run) write, attach a category dropdown to the
-    Parent Account Head cell of every transaction that neither
-    _attach_ambiguous_dropdowns nor _attach_no_match_dropdowns already
-    handled - i.e. genuinely nothing could be inferred at all (no payee
-    name, no Master candidates, no known category mapping). Today those
-    rows are left as a silent blank cell with nothing to click (e.g. a
+    """After a real (non-dry-run) write, attach full Master-wide dropdowns to
+    both the Account Head and Parent Account Head cells of every transaction
+    that neither _attach_ambiguous_dropdowns nor _attach_no_match_dropdowns
+    already handled - i.e. genuinely nothing could be inferred at all (no
+    payee name, no Master candidates, no known category mapping). Today
+    those rows are left as a silent blank cell with nothing to click (e.g. a
     self-transfer narration like "GSGSTTAX ...TRANSFER TO...GST POOL
-    ACCOUNT").
-
-    Only Parent Account Head gets a dropdown here, not Account Head:
-    confirmed live against Master, Account Head is a payee/vendor/employee
-    identity (~7,800 distinct values per company), not a small category
-    list, so a full dropdown of it would be unusably long. Parent Account
-    Head is the real, small category list (~44 values per company) -
-    master_repository.list_all_parent_account_heads(), plus an explicit
-    leading blank choice for an Account Head that has no real parent.
-    Account Head stays free text, with a note explaining why and pointing
-    at the Parent Account Head dropdown alongside it.
+    ACCOUNT"). Account Head gets a range-based dropdown sourced from the
+    _LOOKUP_WORKSHEET helper tab (synced fresh below from every distinct
+    Master Account Head value for each company actually seen this run), and
+    Parent Account Head gets the real, small category list (~44 values per
+    company, well within the inline dropdown cap) plus an explicit leading
+    blank choice for an Account Head that has no real parent -
+    master_repository.list_all_account_heads()/list_all_parent_account_heads().
 
     Parent Account Head is independently pickable here, unlike in
     _attach_ambiguous_dropdowns (see account_head_resolver.dropdown_targets'
@@ -1151,10 +1160,13 @@ def _attach_unresolved_full_dropdowns(transactions: list[TransactionRowSet], set
     independently) - that restriction exists to protect a real candidate
     row's Account Head/Parent Account Head pairing from being decoupled, but
     there are no candidate rows at all in this case, so nothing is being
-    made less safe than today's blank cell.
+    made less safe than today's blank cell; the attached note says so.
 
     Same batched-lookup, single-batch-write, retry-twice, logged-but-never-
-    blocking contract as its two siblings above.
+    blocking contract as its two siblings above - except the lookup-tab sync
+    itself (one Sheets write per distinct company, not per row) happens
+    first and isn't retried on its own; if it fails, this whole step is
+    skipped and logged, exactly like the row-lookup failure path below.
     """
     eligible = []
     for txn in transactions:
@@ -1190,7 +1202,29 @@ def _attach_unresolved_full_dropdowns(transactions: list[TransactionRowSet], set
         )
         return
 
-    parent_options_by_company: dict[str | None, list[str]] = {}
+    options_by_company: dict[str | None, tuple[str | None, list[str]]] = {}
+
+    def _options_for(company: str | None) -> tuple[str | None, list[str]]:
+        if company in options_by_company:
+            return options_by_company[company]
+        account_heads = master_repository.list_all_account_heads(company)
+        account_head_range = None
+        if account_heads:
+            column_letter = chr(ord("A") + len(options_by_company))
+            try:
+                account_head_range = sheets_client.sync_lookup_column(
+                    settings.RECEIPT_PAYMENT_SHEET_ID, _LOOKUP_WORKSHEET, column_letter,
+                    header=f"{company or 'All'} Account Heads", values=account_heads,
+                )
+            except Exception as exc:
+                logger.error(f"[{run_id}] Failed to sync Account Head lookup tab for company={company!r}: {exc}")
+                ledger_repository.log_audit(
+                    run_id, "error", "Failed to sync Account Head lookup tab",
+                    {"company": company, "error": str(exc)},
+                )
+        parent_account_heads = [""] + master_repository.list_all_parent_account_heads(company)
+        options_by_company[company] = (account_head_range, parent_account_heads)
+        return options_by_company[company]
 
     flags = []
     for txn, link_ref_code in eligible:
@@ -1203,15 +1237,13 @@ def _attach_unresolved_full_dropdowns(transactions: list[TransactionRowSet], set
             continue
 
         company = master_repository.resolve_company(txn.source_sheet)
-        if company not in parent_options_by_company:
-            parent_options_by_company[company] = [""] + master_repository.list_all_parent_account_heads(company)
-        parent_account_heads = parent_options_by_company[company]
-        if len(parent_account_heads) <= 1:
+        account_head_range, parent_account_heads = _options_for(company)
+        if not account_head_range:
             continue
 
         flags.append({
             "row_number": row_number, "column": "Account Head",
-            "note_text": _UNRESOLVED_ACCOUNT_HEAD_NOTE,
+            "dropdown_range": account_head_range, "note_text": _UNRESOLVED_ACCOUNT_HEAD_NOTE,
         })
         flags.append({
             "row_number": row_number, "column": "Parent Account Head",

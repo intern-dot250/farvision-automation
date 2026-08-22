@@ -394,6 +394,114 @@ def test_batch_apply_cell_flags_empty_list_is_a_no_op(monkeypatch):
     mock_spreadsheet.batch_update.assert_not_called()
 
 
+def test_batch_apply_cell_flags_dropdown_range_issues_one_of_range_request(monkeypatch):
+    mock_ws = MagicMock()
+    mock_ws.id = 123
+    mock_ws.row_values.return_value = ["Link Ref Code", "Account Head"]
+    mock_spreadsheet = MagicMock()
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+    monkeypatch.setattr(sheets_client, "open_sheet", lambda sid: mock_spreadsheet)
+
+    sheets_client.batch_apply_cell_flags(
+        "sheet1", "LedgerDetails",
+        [{"row_number": 5, "column": "Account Head", "dropdown_range": "Lookup!A2:A7845"}],
+    )
+
+    requests = mock_spreadsheet.batch_update.call_args.args[0]["requests"]
+    assert len(requests) == 1
+    condition = requests[0]["setDataValidation"]["rule"]["condition"]
+    assert condition["type"] == "ONE_OF_RANGE"
+    assert condition["values"] == [{"userEnteredValue": "Lookup!A2:A7845"}]
+
+
+def test_batch_apply_cell_flags_dropdown_values_takes_precedence_over_dropdown_range(monkeypatch):
+    # A flag should never combine both - dropdown_values wins if somehow both
+    # are present, so a caller bug never silently produces two competing
+    # validation requests for the same cell.
+    mock_ws = MagicMock()
+    mock_ws.id = 123
+    mock_ws.row_values.return_value = ["Link Ref Code", "Account Head"]
+    mock_spreadsheet = MagicMock()
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+    monkeypatch.setattr(sheets_client, "open_sheet", lambda sid: mock_spreadsheet)
+
+    sheets_client.batch_apply_cell_flags(
+        "sheet1", "LedgerDetails",
+        [{
+            "row_number": 5, "column": "Account Head",
+            "dropdown_values": ["A", "B"], "dropdown_range": "Lookup!A2:A7845",
+        }],
+    )
+
+    requests = mock_spreadsheet.batch_update.call_args.args[0]["requests"]
+    assert len(requests) == 1
+    assert requests[0]["setDataValidation"]["rule"]["condition"]["type"] == "ONE_OF_LIST"
+
+
+def test_get_or_create_worksheet_returns_existing_worksheet_without_creating(monkeypatch):
+    mock_ws = MagicMock()
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+    mock_spreadsheet = MagicMock()
+    monkeypatch.setattr(sheets_client, "open_sheet", lambda sid: mock_spreadsheet)
+
+    result = sheets_client.get_or_create_worksheet("sheet1", "Lookup")
+
+    assert result is mock_ws
+    mock_spreadsheet.add_worksheet.assert_not_called()
+
+
+def test_get_or_create_worksheet_creates_hidden_worksheet_when_missing(monkeypatch):
+    mock_new_ws = MagicMock()
+    mock_new_ws.id = 999
+    mock_spreadsheet = MagicMock()
+    mock_spreadsheet.add_worksheet.return_value = mock_new_ws
+    monkeypatch.setattr(sheets_client, "open_sheet", lambda sid: mock_spreadsheet)
+
+    calls = {"n": 0}
+
+    def fake_get_worksheet(sid, wn):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise gspread.exceptions.WorksheetNotFound(wn)
+        return mock_new_ws
+
+    monkeypatch.setattr(sheets_client, "get_worksheet", fake_get_worksheet)
+    monkeypatch.setattr(sheets_client._get_worksheet_cached, "cache_clear", lambda: None)
+
+    result = sheets_client.get_or_create_worksheet("sheet1", "Lookup")
+
+    assert result is mock_new_ws
+    mock_spreadsheet.add_worksheet.assert_called_once_with(title="Lookup", rows=10000, cols=4)
+    hide_request = mock_spreadsheet.batch_update.call_args.args[0]["requests"][0]
+    assert hide_request["updateSheetProperties"]["properties"] == {"sheetId": 999, "hidden": True}
+
+
+def test_sync_lookup_column_clears_stale_rows_then_writes_header_and_values(monkeypatch):
+    mock_ws = MagicMock()
+    mock_ws.row_count = 10000
+    monkeypatch.setattr(sheets_client, "get_or_create_worksheet", lambda sid, wn: mock_ws)
+
+    result = sheets_client.sync_lookup_column(
+        "sheet1", "Lookup", "A", header="DPL Account Heads", values=["Alpha", "Beta"]
+    )
+
+    mock_ws.batch_clear.assert_called_once_with(["A2:A10000"])
+    mock_ws.update.assert_called_once_with(
+        range_name="A1", values=[["DPL Account Heads"], ["Alpha"], ["Beta"]], value_input_option="RAW",
+    )
+    assert result == "=Lookup!A2:A3"
+
+
+def test_sync_lookup_column_handles_empty_values(monkeypatch):
+    mock_ws = MagicMock()
+    mock_ws.row_count = 10000
+    monkeypatch.setattr(sheets_client, "get_or_create_worksheet", lambda sid, wn: mock_ws)
+
+    result = sheets_client.sync_lookup_column("sheet1", "Lookup", "A", header="DPL Account Heads", values=[])
+
+    assert result == "=Lookup!A2:A2"
+
+
 def test_add_dropdown_validation_calls_gspread_with_correct_range(monkeypatch):
     mock_ws = MagicMock()
     mock_ws.row_values.return_value = ["Link Ref Code", "Account Head", "Parent Account Head"]
@@ -603,6 +711,20 @@ def test_clear_all_tabs_skips_info_tab(monkeypatch):
     cleared = sheets_client.clear_all_tabs("sheet1")
 
     info_ws.batch_clear.assert_not_called()
+    data_ws.batch_clear.assert_called_once_with(["A2:Y"])
+    assert cleared == ["ReceiptPayment"]
+
+
+def test_clear_all_tabs_skips_lookup_tab(monkeypatch):
+    lookup_ws = _make_mock_worksheet("Lookup")
+    data_ws = _make_mock_worksheet("ReceiptPayment")
+    mock_spreadsheet = MagicMock()
+    mock_spreadsheet.worksheets.return_value = [lookup_ws, data_ws]
+    monkeypatch.setattr(sheets_client, "open_sheet", lambda sid: mock_spreadsheet)
+
+    cleared = sheets_client.clear_all_tabs("sheet1")
+
+    lookup_ws.batch_clear.assert_not_called()
     data_ws.batch_clear.assert_called_once_with(["A2:Y"])
     assert cleared == ["ReceiptPayment"]
 

@@ -2279,17 +2279,15 @@ def test_attach_no_match_dropdowns_survives_find_row_number_failure():
     assert mock_log.call_args.args[1] == "error"
 
 
-# --- _attach_unresolved_full_dropdowns: category-only fallback for rows
+# --- _attach_unresolved_full_dropdowns: full Master-wide fallback for rows
 # where nothing at all could be inferred (no payee, no candidates, no
 # category mapping) - the true dead-end case neither _attach_ambiguous_
-# dropdowns nor _attach_no_match_dropdowns handles. Account Head stays free
-# text (Master's Account Head values are payee identities, not a small
-# category list - confirmed live at ~7,800 distinct values per company, far
-# too many for a usable dropdown); only Parent Account Head - Master's real,
-# small category list - gets a dropdown, plus a note on Account Head. ---
+# dropdowns nor _attach_no_match_dropdowns handles ---
 
 
+_ALL_ACCOUNT_HEADS = ["Ashish Gaur(157)", "Bharat Singh(406)", "Some Vendor"]
 _ALL_PARENT_ACCOUNT_HEADS = ["", "SALARY PAYABLE", "SUNDRY CREDITORS - OTHER"]
+_ACCOUNT_HEAD_LOOKUP_RANGE = "=Lookup!A2:A4"
 
 
 def _unresolved_txn(destination="receipt_payment", link_ref_code=91, **overrides):
@@ -2305,26 +2303,36 @@ def _patched_master_repository():
     return patch.multiple(
         "app.services.automation_engine.master_repository",
         resolve_company=lambda source_sheet: "DPL",
+        list_all_account_heads=lambda company: _ALL_ACCOUNT_HEADS,
         list_all_parent_account_heads=lambda company: _ALL_PARENT_ACCOUNT_HEADS[1:],
     )
 
 
-def test_attach_unresolved_full_dropdowns_writes_note_and_dropdown_for_true_dead_end():
+def _patched_sync_lookup_column(range_value=_ACCOUNT_HEAD_LOOKUP_RANGE):
+    return patch(
+        "app.services.automation_engine.sheets_client.sync_lookup_column", return_value=range_value
+    )
+
+
+def test_attach_unresolved_full_dropdowns_writes_both_columns_for_true_dead_end():
     txn = _unresolved_txn()
 
-    with _patched_master_repository(), patch(
+    with _patched_master_repository(), _patched_sync_lookup_column() as mock_sync, patch(
         "app.services.automation_engine.sheets_client.find_row_numbers_bulk", return_value={"91": 92}
     ), patch(
         "app.services.automation_engine.sheets_client.batch_apply_cell_flags"
     ) as mock_batch:
         _attach_unresolved_full_dropdowns([txn], _FakeSettings(), run_id="test-run")
 
+    mock_sync.assert_called_once_with(
+        "rp-sheet-id", "Lookup", "A", header="DPL Account Heads", values=_ALL_ACCOUNT_HEADS,
+    )
     mock_batch.assert_called_once_with(
         "rp-sheet-id", "LedgerDetails",
         [
             {
                 "row_number": 92, "column": "Account Head",
-                "note_text": _UNRESOLVED_ACCOUNT_HEAD_NOTE,
+                "dropdown_range": _ACCOUNT_HEAD_LOOKUP_RANGE, "note_text": _UNRESOLVED_ACCOUNT_HEAD_NOTE,
             },
             {
                 "row_number": 92, "column": "Parent Account Head",
@@ -2334,10 +2342,27 @@ def test_attach_unresolved_full_dropdowns_writes_note_and_dropdown_for_true_dead
     )
 
 
+def test_attach_unresolved_full_dropdowns_syncs_lookup_tab_once_per_distinct_company():
+    txn_a = _unresolved_txn(link_ref_code=91)
+    txn_b = _unresolved_txn(link_ref_code=92)
+
+    with _patched_master_repository(), _patched_sync_lookup_column() as mock_sync, patch(
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk",
+        return_value={"91": 92, "92": 93},
+    ), patch(
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags"
+    ):
+        _attach_unresolved_full_dropdowns([txn_a, txn_b], _FakeSettings(), run_id="test-run")
+
+    # Both transactions resolve to the same (mocked) company "DPL" - the
+    # lookup tab should be synced once, not once per row.
+    mock_sync.assert_called_once()
+
+
 def test_attach_unresolved_full_dropdowns_includes_blank_option_for_parent_account_head():
     txn = _unresolved_txn()
 
-    with _patched_master_repository(), patch(
+    with _patched_master_repository(), _patched_sync_lookup_column(), patch(
         "app.services.automation_engine.sheets_client.find_row_numbers_bulk", return_value={"91": 92}
     ), patch(
         "app.services.automation_engine.sheets_client.batch_apply_cell_flags"
@@ -2350,6 +2375,7 @@ def test_attach_unresolved_full_dropdowns_includes_blank_option_for_parent_accou
     assert "note_text" not in parent_flag
 
     account_head_flag = next(f for f in flags if f["column"] == "Account Head")
+    assert account_head_flag["dropdown_range"] == _ACCOUNT_HEAD_LOOKUP_RANGE
     assert "dropdown_values" not in account_head_flag
     assert account_head_flag["note_text"] == _UNRESOLVED_ACCOUNT_HEAD_NOTE
 
@@ -2357,7 +2383,7 @@ def test_attach_unresolved_full_dropdowns_includes_blank_option_for_parent_accou
 def test_attach_unresolved_full_dropdowns_never_writes_a_formula():
     txn = _unresolved_txn()
 
-    with _patched_master_repository(), patch(
+    with _patched_master_repository(), _patched_sync_lookup_column(), patch(
         "app.services.automation_engine.sheets_client.find_row_numbers_bulk", return_value={"91": 92}
     ), patch(
         "app.services.automation_engine.sheets_client.batch_apply_cell_flags"
@@ -2366,6 +2392,26 @@ def test_attach_unresolved_full_dropdowns_never_writes_a_formula():
 
     flags = mock_batch.call_args.args[2]
     assert all("formula" not in f for f in flags)
+
+
+def test_attach_unresolved_full_dropdowns_skips_row_when_lookup_sync_fails():
+    txn = _unresolved_txn()
+
+    with _patched_master_repository(), patch(
+        "app.services.automation_engine.sheets_client.sync_lookup_column",
+        side_effect=RuntimeError("Sheets API hiccup"),
+    ), patch(
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk", return_value={"91": 92}
+    ), patch(
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags"
+    ) as mock_batch, patch(
+        "app.services.automation_engine.ledger_repository.log_audit"
+    ) as mock_log:
+        _attach_unresolved_full_dropdowns([txn], _FakeSettings(), run_id="test-run")
+
+    mock_batch.assert_not_called()
+    mock_log.assert_called_once()
+    assert mock_log.call_args.args[1] == "error"
 
 
 def test_attach_unresolved_full_dropdowns_skips_when_already_matched():
@@ -2426,7 +2472,7 @@ def test_attach_unresolved_full_dropdowns_skips_deposit_withdrawal_destination()
 def test_attach_unresolved_full_dropdowns_retries_once_then_logs_error_on_final_failure():
     txn = _unresolved_txn()
 
-    with _patched_master_repository(), patch(
+    with _patched_master_repository(), _patched_sync_lookup_column(), patch(
         "app.services.automation_engine.sheets_client.find_row_numbers_bulk", return_value={"91": 92}
     ), patch(
         "app.services.automation_engine.sheets_client.batch_apply_cell_flags",
@@ -2444,7 +2490,7 @@ def test_attach_unresolved_full_dropdowns_retries_once_then_logs_error_on_final_
 def test_attach_unresolved_full_dropdowns_failure_never_raises():
     txn = _unresolved_txn()
 
-    with _patched_master_repository(), patch(
+    with _patched_master_repository(), _patched_sync_lookup_column(), patch(
         "app.services.automation_engine.sheets_client.find_row_numbers_bulk", return_value={"91": 92}
     ), patch(
         "app.services.automation_engine.sheets_client.batch_apply_cell_flags",

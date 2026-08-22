@@ -193,6 +193,33 @@ def list_worksheet_titles(sheet_id: str) -> list[str]:
     return [worksheet.title for worksheet in open_sheet(sheet_id).worksheets()]
 
 
+def get_or_create_worksheet(
+    sheet_id: str, worksheet_name: str, rows: int = 10000, cols: int = 4
+) -> gspread.Worksheet:
+    """Looks up a worksheet by name, creating it (hidden - not meant for
+    normal use, e.g. a dropdown-source lookup tab) if it doesn't exist yet.
+    Self-healing: no manual one-time setup step is needed in the Google
+    Sheets UI - the first automation run that needs the tab creates it.
+    Uses get_worksheet()'s cache on the found/created worksheet, same as
+    every other worksheet lookup in this module."""
+    spreadsheet = open_sheet(sheet_id)
+    try:
+        return get_worksheet(sheet_id, worksheet_name)
+    except gspread.exceptions.WorksheetNotFound:
+        pass
+    worksheet = spreadsheet.add_worksheet(title=worksheet_name, rows=rows, cols=cols)
+    spreadsheet.batch_update({
+        "requests": [{
+            "updateSheetProperties": {
+                "properties": {"sheetId": worksheet.id, "hidden": True},
+                "fields": "hidden",
+            }
+        }]
+    })
+    _get_worksheet_cached.cache_clear()
+    return get_worksheet(sheet_id, worksheet_name)
+
+
 def _ensure_header(worksheet: gspread.Worksheet, sheet_id: str, worksheet_name: str) -> list[str]:
     """Returns the worksheet's header row, restoring it first if blank (e.g.
     someone accidentally deleted row 1 along with data rows) - without this,
@@ -389,6 +416,35 @@ def append_records(sheet_id: str, worksheet_name: str, records: list[dict]) -> N
     _apply_amount_number_format(worksheet, header, worksheet_name)
 
 
+def sync_lookup_column(
+    sheet_id: str, worksheet_name: str, column_letter: str, header: str, values: list[str]
+) -> str:
+    """Overwrites one column of a helper/lookup tab (see
+    get_or_create_worksheet()) with `header` in row 1 and `values` below it,
+    clearing any stale leftover rows first (e.g. if Master's list shrank
+    since the last sync) - used as the same-spreadsheet source range for a
+    "List from a range" (ONE_OF_RANGE) dropdown validation, which has no
+    practical size cap unlike an inline ONE_OF_LIST dropdown (confirmed
+    live: the Sheets API rejects a ONE_OF_LIST validation outright past 500
+    values, with error "Use the 'List from a range' criteria instead").
+
+    Returns the A1 range reference for the written values (excluding the
+    header row), ready to pass straight into batch_apply_cell_flags' new
+    `dropdown_range` flag. Confirmed live: the Sheets API's ONE_OF_RANGE
+    condition rejects a bare "Sheet!A2:A10" string ("Invalid
+    ConditionValue.userEnteredValue") - it must be a formula-style
+    reference with a leading "=", e.g. "=Sheet!A2:A10".
+    """
+    worksheet = get_or_create_worksheet(sheet_id, worksheet_name)
+    last_row = max(worksheet.row_count, len(values) + 1, 2)
+    worksheet.batch_clear([f"{column_letter}2:{column_letter}{last_row}"])
+    worksheet.update(
+        range_name=f"{column_letter}1", values=[[header]] + [[v] for v in values],
+        value_input_option="RAW",
+    )
+    return f"={worksheet_name}!{column_letter}2:{column_letter}{max(len(values) + 1, 2)}"
+
+
 def add_dropdown_validation(
     sheet_id: str, worksheet_name: str, row_number: int, column: str, values: list[str]
 ) -> None:
@@ -467,9 +523,14 @@ def batch_apply_cell_flags(sheet_id: str, worksheet_name: str, flags: list[dict]
     validation/note-clearing requests.
 
     Each entry in `flags`: {"row_number": int, "column": str,
-    "dropdown_values": list[str] | None, "note_text": str | None,
-    "formula": str | None} - any of the three optional fields can be
-    combined for the same cell (e.g. a dropdown + a note together).
+    "dropdown_values": list[str] | None, "dropdown_range": str | None,
+    "note_text": str | None, "formula": str | None} - any of note_text/
+    formula can be combined with one of dropdown_values/dropdown_range for
+    the same cell (e.g. a dropdown + a note together); dropdown_values and
+    dropdown_range are mutually exclusive per entry (an inline ONE_OF_LIST
+    dropdown vs. a "List from a range" ONE_OF_RANGE dropdown - the latter
+    for option lists too large for ONE_OF_LIST's ~500-value cap, sourced
+    from a same-spreadsheet helper tab via sync_lookup_column()).
     No-op (per entry) if `column` isn't a real header on this worksheet.
     A malformed request anywhere in the batch fails the whole call
     (Sheets API batchUpdate is all-or-nothing) - callers should treat
@@ -498,6 +559,7 @@ def batch_apply_cell_flags(sheet_id: str, worksheet_name: str, flags: list[dict]
         }
 
         dropdown_values = flag.get("dropdown_values")
+        dropdown_range = flag.get("dropdown_range")
         if dropdown_values:
             requests.append({
                 "setDataValidation": {
@@ -506,6 +568,19 @@ def batch_apply_cell_flags(sheet_id: str, worksheet_name: str, flags: list[dict]
                         "condition": {
                             "type": ValidationConditionType.one_of_list.value,
                             "values": [{"userEnteredValue": v} for v in dropdown_values],
+                        },
+                        "showCustomUi": True,
+                    },
+                }
+            })
+        elif dropdown_range:
+            requests.append({
+                "setDataValidation": {
+                    "range": cell_range,
+                    "rule": {
+                        "condition": {
+                            "type": ValidationConditionType.one_of_range.value,
+                            "values": [{"userEnteredValue": dropdown_range}],
                         },
                         "showCustomUi": True,
                     },
@@ -537,8 +612,13 @@ def batch_apply_cell_flags(sheet_id: str, worksheet_name: str, flags: list[dict]
 
 
 # Never cleared, regardless of which tab-name conventions a spreadsheet uses -
-# holds reference/instructional content, not transaction data.
-_CLEAR_EXCLUDED_WORKSHEETS = {"Info"}
+# "Info" holds reference/instructional content, not transaction data;
+# "Lookup" (see get_or_create_worksheet/sync_lookup_column) is a hidden
+# dropdown-source helper tab synced independently each time it's needed, not
+# per-automation-run transaction data - clearing it here would leave any
+# already-attached ONE_OF_RANGE dropdown pointing at a blank range until the
+# next row that needs it happens to re-sync it.
+_CLEAR_EXCLUDED_WORKSHEETS = {"Info", "Lookup"}
 
 
 def clear_all_tabs(sheet_id: str) -> list[str]:

@@ -493,6 +493,44 @@ def test_list_payees_by_parent_account_head_without_near_name_is_alphabetical(mo
     assert result == ["Amit Kumar(300)", "Zoravar Singh(200)"]
 
 
+def test_list_all_account_heads_returns_sorted_deduped_values(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [
+            {"Company": "DPL", "Account Head": "Bharat Singh(406)", "Parent Account Head": "SALARY PAYABLE"},
+            {"Company": "DPL", "Account Head": "Ashish Gaur(157)", "Parent Account Head": "SALARY PAYABLE"},
+            {"Company": "DPL", "Account Head": "Bharat Singh(406)", "Parent Account Head": "SALARY PAYABLE"},
+            {"Company": "DPL", "Account Head": "Some Vendor", "Parent Account Head": "SUNDRY CREDITORS - OTHER"},
+            {"Company": "DPL", "Account Head": "", "Parent Account Head": "SUNDRY CREDITORS - OTHER"},
+        ]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    result = master_repository.list_all_account_heads(company="DPL")
+
+    assert result == ["Ashish Gaur(157)", "Bharat Singh(406)", "Some Vendor"]
+
+
+def test_list_all_account_heads_scoped_by_company(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [
+            {"Company": "DPL", "Account Head": "DPL Employee", "Parent Account Head": "SALARY PAYABLE"},
+            {"Company": "AMB", "Account Head": "AMB Employee", "Parent Account Head": "SALARY PAYABLE"},
+        ]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    result = master_repository.list_all_account_heads(company="DPL")
+
+    assert result == ["DPL Employee"]
+
+
+def test_list_all_account_heads_returns_empty_when_column_missing(monkeypatch):
+    df = pd.DataFrame.from_records([{"Company": "DPL"}])
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    assert master_repository.list_all_account_heads(company="DPL") == []
+
+
 def test_list_all_parent_account_heads_returns_sorted_deduped_values(monkeypatch):
     df = pd.DataFrame.from_records(
         [

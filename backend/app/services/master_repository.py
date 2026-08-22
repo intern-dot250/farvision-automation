@@ -650,17 +650,34 @@ def list_payees_by_parent_account_head(
     return sorted(payees)
 
 
+def list_all_account_heads(company: str | None = "DPL") -> list[str]:
+    """Every distinct Account Head value Master has on file - the full,
+    unfiltered option list for the Account Head dropdown when a transaction
+    could not be matched or narrowed down at all (no payee name, no
+    candidates, no known category mapping to fall back to). Confirmed live:
+    ~7,800 distinct values per company (Account Head is a payee/vendor/
+    employee identity, not a small category), so this deliberately stays a
+    plain inline dropdown list rather than being pre-filtered - the caller
+    is expected to type-to-search within the native Sheets dropdown UI, not
+    scroll. Company-scoped the same way as every other lookup in this file,
+    since Master mixes two companies' charts of accounts."""
+    df = _load_master_df()
+    if "Account Head" not in df.columns:
+        return []
+    company_mask = None
+    if company and "Company" in df.columns:
+        company_mask = df["Company"].astype(str).str.strip().str.upper() == company.strip().upper()
+    values = df["Account Head"] if company_mask is None else df.loc[company_mask, "Account Head"]
+    heads = {str(value).strip() for value in values if str(value).strip()}
+    return sorted(heads)
+
+
 def list_all_parent_account_heads(company: str | None = "DPL") -> list[str]:
     """Every distinct Parent Account Head value Master has on file - the
     real, small category list (confirmed live: ~44 values per company) used
     as the dropdown for a transaction where nothing at all could be matched
     or narrowed down (no payee name, no candidates, no known category
-    mapping to fall back to). Deliberately NOT paired with an equivalent
-    "every Account Head" list - Account Head in Master is a payee/vendor/
-    employee identity, not a category (confirmed live: ~7,800 distinct
-    values per company), so a full dropdown of it would be unusably long
-    and is not offered anywhere in this codebase; Account Head stays free
-    text for this fallback case. Company-scoped the same way as every other
+    mapping to fall back to). Company-scoped the same way as every other
     lookup in this file, since Master mixes two companies' charts of
     accounts."""
     df = _load_master_df()
