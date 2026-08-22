@@ -1117,6 +1117,127 @@ def _attach_no_match_dropdowns(transactions: list[TransactionRowSet], settings, 
             )
 
 
+_UNRESOLVED_ACCOUNT_HEAD_NOTE = (
+    "Nothing could be automatically matched for this transaction - no payee "
+    "name could be extracted and there is no known category to fall back "
+    "to. Describe it here manually and pick the correct category from the "
+    "Parent Account Head dropdown alongside it."
+)
+
+
+def _attach_unresolved_full_dropdowns(transactions: list[TransactionRowSet], settings, run_id: str) -> None:
+    """After a real (non-dry-run) write, attach a category dropdown to the
+    Parent Account Head cell of every transaction that neither
+    _attach_ambiguous_dropdowns nor _attach_no_match_dropdowns already
+    handled - i.e. genuinely nothing could be inferred at all (no payee
+    name, no Master candidates, no known category mapping). Today those
+    rows are left as a silent blank cell with nothing to click (e.g. a
+    self-transfer narration like "GSGSTTAX ...TRANSFER TO...GST POOL
+    ACCOUNT").
+
+    Only Parent Account Head gets a dropdown here, not Account Head:
+    confirmed live against Master, Account Head is a payee/vendor/employee
+    identity (~7,800 distinct values per company), not a small category
+    list, so a full dropdown of it would be unusably long. Parent Account
+    Head is the real, small category list (~44 values per company) -
+    master_repository.list_all_parent_account_heads(), plus an explicit
+    leading blank choice for an Account Head that has no real parent.
+    Account Head stays free text, with a note explaining why and pointing
+    at the Parent Account Head dropdown alongside it.
+
+    Parent Account Head is independently pickable here, unlike in
+    _attach_ambiguous_dropdowns (see account_head_resolver.dropdown_targets'
+    docstring for why that function deliberately never offers it
+    independently) - that restriction exists to protect a real candidate
+    row's Account Head/Parent Account Head pairing from being decoupled, but
+    there are no candidate rows at all in this case, so nothing is being
+    made less safe than today's blank cell.
+
+    Same batched-lookup, single-batch-write, retry-twice, logged-but-never-
+    blocking contract as its two siblings above.
+    """
+    eligible = []
+    for txn in transactions:
+        classification = txn.classification
+        if (
+            txn.destination != "receipt_payment"
+            or not txn.rows
+            or classification.is_internal
+            or classification.matched_master_row is not None
+            or classification.account_head_ambiguous
+            or classification.no_match_dropdown_options
+        ):
+            continue
+        ledger_rows = txn.rows.get("LedgerDetails") or []
+        link_ref_code = ledger_rows[0].get("Link Ref Code") if ledger_rows else None
+        if link_ref_code is None:
+            continue
+        eligible.append((txn, link_ref_code))
+
+    if not eligible:
+        return
+
+    try:
+        row_by_lrc = sheets_client.find_row_numbers_bulk(
+            settings.RECEIPT_PAYMENT_SHEET_ID, "LedgerDetails", "Link Ref Code",
+            [lrc for _, lrc in eligible],
+        )
+    except Exception as exc:
+        logger.error(f"[{run_id}] Failed to locate written LedgerDetails rows - dropdowns not attached: {exc}")
+        ledger_repository.log_audit(
+            run_id, "error", "Failed to locate written LedgerDetails rows for unresolved dropdowns",
+            {"error": str(exc)},
+        )
+        return
+
+    parent_options_by_company: dict[str | None, list[str]] = {}
+
+    flags = []
+    for txn, link_ref_code in eligible:
+        row_number = row_by_lrc.get(str(link_ref_code).strip())
+        if row_number is None:
+            logger.error(
+                f"[{run_id}] Could not locate written LedgerDetails row for SL#{txn.sl_no} "
+                f"(Link Ref Code={link_ref_code}) - dropdown not attached"
+            )
+            continue
+
+        company = master_repository.resolve_company(txn.source_sheet)
+        if company not in parent_options_by_company:
+            parent_options_by_company[company] = [""] + master_repository.list_all_parent_account_heads(company)
+        parent_account_heads = parent_options_by_company[company]
+        if len(parent_account_heads) <= 1:
+            continue
+
+        flags.append({
+            "row_number": row_number, "column": "Account Head",
+            "note_text": _UNRESOLVED_ACCOUNT_HEAD_NOTE,
+        })
+        flags.append({
+            "row_number": row_number, "column": "Parent Account Head",
+            "dropdown_values": parent_account_heads,
+        })
+
+    if not flags:
+        return
+
+    for attempt in (1, 2):
+        try:
+            sheets_client.batch_apply_cell_flags(settings.RECEIPT_PAYMENT_SHEET_ID, "LedgerDetails", flags)
+            break
+        except Exception as exc:
+            if attempt < 2:
+                continue
+            logger.error(
+                f"[{run_id}] Failed to attach unresolved Account Head/Parent Account Head dropdowns for "
+                f"{len(flags)} cell(s): {exc}"
+            )
+            ledger_repository.log_audit(
+                run_id, "error", "Failed to attach unresolved Account Head/Parent Account Head dropdowns",
+                {"cell_count": len(flags), "error": str(exc)},
+            )
+
+
 def _attach_tax_info_description_dropdowns(
     import_tax_info_rows: list[dict], start_row: int, settings, run_id: str
 ) -> None:
@@ -1282,6 +1403,13 @@ def _run_automation_stream_body(dry_run: bool, rows: list[dict] | None, run_id: 
             logger.error(f"[{run_id}] Attaching no-match Account Head dropdowns failed: {exc}")
             ledger_repository.log_audit(
                 run_id, "error", "Attaching no-match Account Head dropdowns failed", {"error": str(exc)}
+            )
+        try:
+            _attach_unresolved_full_dropdowns(transactions, settings, run_id)
+        except Exception as exc:
+            logger.error(f"[{run_id}] Attaching unresolved full dropdowns failed: {exc}")
+            ledger_repository.log_audit(
+                run_id, "error", "Attaching unresolved full dropdowns failed", {"error": str(exc)}
             )
 
     result = RunResult(

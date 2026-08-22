@@ -9,6 +9,8 @@ from app.services.automation_engine import (
     _attach_ambiguous_dropdowns,
     _attach_no_match_dropdowns,
     _NO_MATCH_ACCOUNT_HEAD_NOTE,
+    _attach_unresolved_full_dropdowns,
+    _UNRESOLVED_ACCOUNT_HEAD_NOTE,
     _attach_tax_info_description_dropdowns,
     _build_deposit_withdrawal_rows,
     _build_receipt_payment_rows,
@@ -2271,6 +2273,200 @@ def test_attach_no_match_dropdowns_survives_find_row_number_failure():
         "app.services.automation_engine.ledger_repository.log_audit"
     ) as mock_log:
         _attach_no_match_dropdowns([txn], _FakeSettings(), run_id="test-run")  # must not raise
+
+    mock_batch.assert_not_called()
+    mock_log.assert_called_once()
+    assert mock_log.call_args.args[1] == "error"
+
+
+# --- _attach_unresolved_full_dropdowns: category-only fallback for rows
+# where nothing at all could be inferred (no payee, no candidates, no
+# category mapping) - the true dead-end case neither _attach_ambiguous_
+# dropdowns nor _attach_no_match_dropdowns handles. Account Head stays free
+# text (Master's Account Head values are payee identities, not a small
+# category list - confirmed live at ~7,800 distinct values per company, far
+# too many for a usable dropdown); only Parent Account Head - Master's real,
+# small category list - gets a dropdown, plus a note on Account Head. ---
+
+
+_ALL_PARENT_ACCOUNT_HEADS = ["", "SALARY PAYABLE", "SUNDRY CREDITORS - OTHER"]
+
+
+def _unresolved_txn(destination="receipt_payment", link_ref_code=91, **overrides):
+    txn = _receipt_payment_txn("Unclassified", None)
+    txn.destination = destination
+    txn.rows = {"LedgerDetails": [{"Link Ref Code": link_ref_code}]}
+    for key, value in overrides.items():
+        setattr(txn.classification, key, value)
+    return txn
+
+
+def _patched_master_repository():
+    return patch.multiple(
+        "app.services.automation_engine.master_repository",
+        resolve_company=lambda source_sheet: "DPL",
+        list_all_parent_account_heads=lambda company: _ALL_PARENT_ACCOUNT_HEADS[1:],
+    )
+
+
+def test_attach_unresolved_full_dropdowns_writes_note_and_dropdown_for_true_dead_end():
+    txn = _unresolved_txn()
+
+    with _patched_master_repository(), patch(
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk", return_value={"91": 92}
+    ), patch(
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags"
+    ) as mock_batch:
+        _attach_unresolved_full_dropdowns([txn], _FakeSettings(), run_id="test-run")
+
+    mock_batch.assert_called_once_with(
+        "rp-sheet-id", "LedgerDetails",
+        [
+            {
+                "row_number": 92, "column": "Account Head",
+                "note_text": _UNRESOLVED_ACCOUNT_HEAD_NOTE,
+            },
+            {
+                "row_number": 92, "column": "Parent Account Head",
+                "dropdown_values": _ALL_PARENT_ACCOUNT_HEADS,
+            },
+        ],
+    )
+
+
+def test_attach_unresolved_full_dropdowns_includes_blank_option_for_parent_account_head():
+    txn = _unresolved_txn()
+
+    with _patched_master_repository(), patch(
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk", return_value={"91": 92}
+    ), patch(
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags"
+    ) as mock_batch:
+        _attach_unresolved_full_dropdowns([txn], _FakeSettings(), run_id="test-run")
+
+    flags = mock_batch.call_args.args[2]
+    parent_flag = next(f for f in flags if f["column"] == "Parent Account Head")
+    assert parent_flag["dropdown_values"][0] == ""
+    assert "note_text" not in parent_flag
+
+    account_head_flag = next(f for f in flags if f["column"] == "Account Head")
+    assert "dropdown_values" not in account_head_flag
+    assert account_head_flag["note_text"] == _UNRESOLVED_ACCOUNT_HEAD_NOTE
+
+
+def test_attach_unresolved_full_dropdowns_never_writes_a_formula():
+    txn = _unresolved_txn()
+
+    with _patched_master_repository(), patch(
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk", return_value={"91": 92}
+    ), patch(
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags"
+    ) as mock_batch:
+        _attach_unresolved_full_dropdowns([txn], _FakeSettings(), run_id="test-run")
+
+    flags = mock_batch.call_args.args[2]
+    assert all("formula" not in f for f in flags)
+
+
+def test_attach_unresolved_full_dropdowns_skips_when_already_matched():
+    txn = _unresolved_txn(matched_master_row={"Account Head": "Some Vendor"})
+
+    with _patched_master_repository(), patch(
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk"
+    ) as mock_find:
+        _attach_unresolved_full_dropdowns([txn], _FakeSettings(), run_id="test-run")
+
+    mock_find.assert_not_called()
+
+
+def test_attach_unresolved_full_dropdowns_skips_ambiguous_transactions():
+    txn = _unresolved_txn(account_head_ambiguous=True)
+
+    with _patched_master_repository(), patch(
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk"
+    ) as mock_find:
+        _attach_unresolved_full_dropdowns([txn], _FakeSettings(), run_id="test-run")
+
+    mock_find.assert_not_called()
+
+
+def test_attach_unresolved_full_dropdowns_skips_no_match_mapped_transactions():
+    txn = _unresolved_txn(no_match_dropdown_options=["Ashish Gaur(157)"])
+
+    with _patched_master_repository(), patch(
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk"
+    ) as mock_find:
+        _attach_unresolved_full_dropdowns([txn], _FakeSettings(), run_id="test-run")
+
+    mock_find.assert_not_called()
+
+
+def test_attach_unresolved_full_dropdowns_skips_internal_transactions():
+    txn = _unresolved_txn(is_internal=True)
+
+    with _patched_master_repository(), patch(
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk"
+    ) as mock_find:
+        _attach_unresolved_full_dropdowns([txn], _FakeSettings(), run_id="test-run")
+
+    mock_find.assert_not_called()
+
+
+def test_attach_unresolved_full_dropdowns_skips_deposit_withdrawal_destination():
+    txn = _unresolved_txn(destination="deposit_withdrawal")
+
+    with _patched_master_repository(), patch(
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk"
+    ) as mock_find:
+        _attach_unresolved_full_dropdowns([txn], _FakeSettings(), run_id="test-run")
+
+    mock_find.assert_not_called()
+
+
+def test_attach_unresolved_full_dropdowns_retries_once_then_logs_error_on_final_failure():
+    txn = _unresolved_txn()
+
+    with _patched_master_repository(), patch(
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk", return_value={"91": 92}
+    ), patch(
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags",
+        side_effect=RuntimeError("Sheets API hiccup"),
+    ) as mock_batch, patch(
+        "app.services.automation_engine.ledger_repository.log_audit"
+    ) as mock_log:
+        _attach_unresolved_full_dropdowns([txn], _FakeSettings(), run_id="test-run")
+
+    assert mock_batch.call_count == 2
+    mock_log.assert_called_once()
+    assert mock_log.call_args.args[1] == "error"
+
+
+def test_attach_unresolved_full_dropdowns_failure_never_raises():
+    txn = _unresolved_txn()
+
+    with _patched_master_repository(), patch(
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk", return_value={"91": 92}
+    ), patch(
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags",
+        side_effect=RuntimeError("boom"),
+    ), patch(
+        "app.services.automation_engine.ledger_repository.log_audit"
+    ):
+        _attach_unresolved_full_dropdowns([txn], _FakeSettings(), run_id="test-run")  # must not raise
+
+
+def test_attach_unresolved_full_dropdowns_survives_find_row_number_failure():
+    txn = _unresolved_txn()
+
+    with _patched_master_repository(), patch(
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk",
+        side_effect=RuntimeError("quota exceeded"),
+    ), patch(
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags"
+    ) as mock_batch, patch(
+        "app.services.automation_engine.ledger_repository.log_audit"
+    ) as mock_log:
+        _attach_unresolved_full_dropdowns([txn], _FakeSettings(), run_id="test-run")  # must not raise
 
     mock_batch.assert_not_called()
     mock_log.assert_called_once()

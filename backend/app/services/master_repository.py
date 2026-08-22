@@ -650,6 +650,30 @@ def list_payees_by_parent_account_head(
     return sorted(payees)
 
 
+def list_all_parent_account_heads(company: str | None = "DPL") -> list[str]:
+    """Every distinct Parent Account Head value Master has on file - the
+    real, small category list (confirmed live: ~44 values per company) used
+    as the dropdown for a transaction where nothing at all could be matched
+    or narrowed down (no payee name, no candidates, no known category
+    mapping to fall back to). Deliberately NOT paired with an equivalent
+    "every Account Head" list - Account Head in Master is a payee/vendor/
+    employee identity, not a category (confirmed live: ~7,800 distinct
+    values per company), so a full dropdown of it would be unusably long
+    and is not offered anywhere in this codebase; Account Head stays free
+    text for this fallback case. Company-scoped the same way as every other
+    lookup in this file, since Master mixes two companies' charts of
+    accounts."""
+    df = _load_master_df()
+    if "Parent Account Head" not in df.columns:
+        return []
+    company_mask = None
+    if company and "Company" in df.columns:
+        company_mask = df["Company"].astype(str).str.strip().str.upper() == company.strip().upper()
+    values = df["Parent Account Head"] if company_mask is None else df.loc[company_mask, "Parent Account Head"]
+    heads = {str(value).strip() for value in values if str(value).strip()}
+    return sorted(heads)
+
+
 def clear_cache() -> None:
     """Force the next lookup to re-fetch Master from Sheets (e.g. after edits)."""
     _load_master_df.cache_clear()
