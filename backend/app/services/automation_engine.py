@@ -931,17 +931,37 @@ _PARENT_ACCOUNT_HEAD_FORMULA = (
 )
 
 
-def _attach_ambiguous_dropdowns(transactions: list[TransactionRowSet], settings, run_id: str) -> None:
+def _attach_ambiguous_dropdowns(
+    transactions: list[TransactionRowSet], settings, run_id: str,
+    account_head_lookup_cache: dict | None = None,
+) -> None:
     """After a real (non-dry-run) write, attach an in-sheet dropdown to the
     Account Head cell of every transaction whose beneficiary was ambiguous
-    (classification.account_head_candidates set) - restricted to just that
-    beneficiary's real candidate values, so it's resolved with two clicks
-    directly in the sheet. Account Head is the only field ever offered as a
-    dropdown - see account_head_resolver.dropdown_targets() for why Parent
-    Account Head is deliberately never independently pickable. A cell note
-    is attached alongside it, since native Sheets validation can't
-    auto-update Parent Account Head to match whichever Account Head gets
-    picked.
+    (classification.account_head_candidates set).
+
+    Two shapes, depending on whether the extracted payee text itself looks
+    like a GST/TDS/Credit-style category label rather than a real vendor/
+    person (see _matched_account_head_keywords) - e.g. "CREDITOR - AR"
+    fuzzy-matches 2 real Master rows, but neither is a confident "this is
+    the payee" match, it's a category label that happens to resemble both:
+    - Keyword-matched: same treatment as a true dead-end row (see
+      _attach_unresolved_full_dropdowns) - Account Head gets a range-based
+      dropdown of every Master entry matching that keyword (not just the 2
+      real fuzzy candidates), Parent Account Head gets its own independent
+      dropdown of every real category.
+    - Not keyword-matched (the common case): unchanged - Account Head is
+      restricted to just this beneficiary's real candidate values, so it's
+      resolved with two clicks directly in the sheet. Account Head is the
+      only field ever offered as a dropdown here - see account_head_
+      resolver.dropdown_targets() for why Parent Account Head is
+      deliberately never independently pickable in this branch (it protects
+      a real candidate row's Account Head/Parent Account Head pairing from
+      being decoupled - a protection that doesn't apply to the keyword-
+      matched branch above, since there's no real candidate pairing to
+      protect there either).
+    A cell note is attached alongside either shape, since native Sheets
+    validation can't auto-update Parent Account Head to match whichever
+    Account Head gets picked.
 
     All row lookups and all dropdown/note/formula writes for every eligible
     transaction are batched into one find_row_numbers_bulk() read and one
@@ -954,28 +974,33 @@ def _attach_ambiguous_dropdowns(transactions: list[TransactionRowSet], settings,
     or failing the actual data write, which has already happened by the
     time this runs.
     """
+    keyword_eligible = []
     eligible = []
     for txn in transactions:
         candidates = txn.classification.account_head_candidates
         if not candidates or txn.destination != "receipt_payment" or not txn.rows:
             continue
-        targets = account_head_resolver.dropdown_targets(candidates)
-        if not targets:
-            continue
         ledger_rows = txn.rows.get("LedgerDetails") or []
         link_ref_code = ledger_rows[0].get("Link Ref Code") if ledger_rows else None
         if link_ref_code is None:
             continue
+        matched_keywords = _matched_account_head_keywords(txn)
+        if matched_keywords:
+            keyword_eligible.append((txn, matched_keywords, link_ref_code))
+            continue
+        targets = account_head_resolver.dropdown_targets(candidates)
+        if not targets:
+            continue
         synthesized = "Account Head" in targets and account_head_resolver.uses_synthesized_labels(candidates)
         eligible.append((txn, targets, synthesized, link_ref_code))
 
-    if not eligible:
+    if not eligible and not keyword_eligible:
         return
 
     try:
         row_by_lrc = sheets_client.find_row_numbers_bulk(
             settings.RECEIPT_PAYMENT_SHEET_ID, "LedgerDetails", "Link Ref Code",
-            [lrc for _, _, _, lrc in eligible],
+            [lrc for _, _, _, lrc in eligible] + [lrc for _, _, lrc in keyword_eligible],
         )
     except Exception as exc:
         logger.error(f"[{run_id}] Failed to locate written LedgerDetails rows - dropdowns not attached: {exc}")
@@ -1012,6 +1037,38 @@ def _attach_ambiguous_dropdowns(transactions: list[TransactionRowSet], settings,
                 placeholder=account_head_resolver.NO_PARENT_HEAD_LABEL,
             )
             flags.append({"row_number": row_number, "column": "Parent Account Head", "formula": formula})
+
+    if keyword_eligible:
+        account_head_lookup_cache = {} if account_head_lookup_cache is None else account_head_lookup_cache
+        parent_account_heads_by_company: dict[str | None, list[str]] = {}
+        for txn, matched_keywords, link_ref_code in keyword_eligible:
+            row_number = row_by_lrc.get(str(link_ref_code).strip())
+            if row_number is None:
+                logger.error(
+                    f"[{run_id}] Could not locate written LedgerDetails row for SL#{txn.sl_no} "
+                    f"(Link Ref Code={link_ref_code}) - dropdown not attached"
+                )
+                continue
+
+            company = master_repository.resolve_company(txn.source_sheet)
+            account_head_range = _sync_account_head_lookup_range(
+                account_head_lookup_cache, settings, run_id, company, matched_keywords
+            )
+            if not account_head_range:
+                continue
+            if company not in parent_account_heads_by_company:
+                parent_account_heads_by_company[company] = (
+                    [""] + master_repository.list_all_parent_account_heads(company)
+                )
+
+            flags.append({
+                "row_number": row_number, "column": "Account Head",
+                "dropdown_range": account_head_range, "note_text": _KEYWORD_SCOPED_ACCOUNT_HEAD_NOTE,
+            })
+            flags.append({
+                "row_number": row_number, "column": "Parent Account Head",
+                "dropdown_values": parent_account_heads_by_company[company],
+            })
 
     for attempt in (1, 2):
         try:
@@ -1151,18 +1208,84 @@ _NARRATION_ACCOUNT_HEAD_KEYWORDS = ["GST", "TDS", "Credit"]
 
 def _matched_account_head_keywords(txn: TransactionRowSet) -> tuple[str, ...]:
     """Every keyword from _NARRATION_ACCOUNT_HEAD_KEYWORDS found
-    (case-insensitive substring) in this transaction's own narration or raw
-    description - checked against both since either can carry the hint a
-    Master lookup itself already failed to use (description is the raw bank
-    text; narration is the app's own display text, sometimes built from
-    other source columns the raw description never had - see classifier.
-    _extract_from_narration for the same reasoning). Returns a sorted tuple
-    so it's directly usable as a stable dict cache key."""
-    haystack = f"{txn.description} {txn.narration}".upper()
+    (case-insensitive substring) in this transaction's own narration, raw
+    description, or extracted payee name - checked against all three since
+    any of them can carry the hint a Master lookup itself already failed to
+    use fully (description is the raw bank text; narration is the app's own
+    display text, sometimes built from other source columns the raw
+    description never had - see classifier._extract_from_narration for the
+    same reasoning; payee_name is whatever extraction already settled on,
+    e.g. "CREDITOR - AR" - itself a category-shaped label, not a real
+    vendor/person, even though it fuzzy-matched real Master rows). Returns a
+    sorted tuple so it's directly usable as a stable dict cache key."""
+    haystack = f"{txn.description} {txn.narration} {txn.classification.payee_name or ''}".upper()
     return tuple(sorted(kw for kw in _NARRATION_ACCOUNT_HEAD_KEYWORDS if kw.upper() in haystack))
 
 
-def _attach_unresolved_full_dropdowns(transactions: list[TransactionRowSet], settings, run_id: str) -> None:
+def _sync_account_head_lookup_range(
+    cache: dict[tuple[str | None, tuple[str, ...]], str | None],
+    settings, run_id: str, company: str | None, keywords: tuple[str, ...],
+) -> str | None:
+    """Syncs (once per distinct (company, keywords) combo, via `cache`) the
+    keyword-filtered or full Master Account Head list into the next unused
+    column of the _LOOKUP_WORKSHEET helper tab, and returns the resulting
+    ONE_OF_RANGE source range - or None if there's nothing to sync (e.g.
+    Master has no matching rows at all).
+
+    `cache` must be shared across every caller within the same automation
+    run, not one dict per caller: both _attach_ambiguous_dropdowns and
+    _attach_unresolved_full_dropdowns sync into this same tab, and each
+    assigns the next column in encounter order (`chr(ord("A") + len(cache))`)
+    - two independent per-function caches could both start at column "A" for
+    two different (company, keywords) combos in the same run, and the
+    second sync would silently overwrite the first's already-referenced
+    source range out from under an already-attached dropdown.
+    """
+    key = (company, keywords)
+    if key in cache:
+        return cache[key]
+    if keywords:
+        account_heads = master_repository.list_account_heads_matching_keywords(list(keywords), company)
+        header = f"{company or 'All'} Account Heads ({'/'.join(keywords)})"
+    else:
+        account_heads = master_repository.list_all_account_heads(company)
+        header = f"{company or 'All'} Account Heads"
+    account_head_range = None
+    if account_heads:
+        column_letter = chr(ord("A") + len(cache))
+        try:
+            account_head_range = sheets_client.sync_lookup_column(
+                settings.RECEIPT_PAYMENT_SHEET_ID, _LOOKUP_WORKSHEET, column_letter,
+                header=header, values=account_heads,
+            )
+        except Exception as exc:
+            logger.error(
+                f"[{run_id}] Failed to sync Account Head lookup tab for company={company!r} "
+                f"keywords={keywords!r}: {exc}"
+            )
+            ledger_repository.log_audit(
+                run_id, "error", "Failed to sync Account Head lookup tab",
+                {"company": company, "keywords": list(keywords), "error": str(exc)},
+            )
+    cache[key] = account_head_range
+    return account_head_range
+
+
+_KEYWORD_SCOPED_ACCOUNT_HEAD_NOTE = (
+    "This beneficiary text matches a GST/TDS/Credit-style label rather "
+    "than a specific vendor, so every matching Master entry is offered "
+    "here instead of a narrow name match. Pick the real Account Head from "
+    "the dropdown, and the correct category from the Parent Account Head "
+    "dropdown alongside it - Master does not enforce that the pair you "
+    "pick belongs together, so double-check they make sense as a "
+    "combination."
+)
+
+
+def _attach_unresolved_full_dropdowns(
+    transactions: list[TransactionRowSet], settings, run_id: str,
+    account_head_lookup_cache: dict | None = None,
+) -> None:
     """After a real (non-dry-run) write, attach full Master-wide dropdowns to
     both the Account Head and Parent Account Head cells of every transaction
     that neither _attach_ambiguous_dropdowns nor _attach_no_match_dropdowns
@@ -1230,38 +1353,8 @@ def _attach_unresolved_full_dropdowns(transactions: list[TransactionRowSet], set
         )
         return
 
-    options_by_key: dict[tuple[str | None, tuple[str, ...]], tuple[str | None, list[str]]] = {}
-
-    def _options_for(company: str | None, keywords: tuple[str, ...]) -> tuple[str | None, list[str]]:
-        key = (company, keywords)
-        if key in options_by_key:
-            return options_by_key[key]
-        if keywords:
-            account_heads = master_repository.list_account_heads_matching_keywords(list(keywords), company)
-            header = f"{company or 'All'} Account Heads ({'/'.join(keywords)})"
-        else:
-            account_heads = master_repository.list_all_account_heads(company)
-            header = f"{company or 'All'} Account Heads"
-        account_head_range = None
-        if account_heads:
-            column_letter = chr(ord("A") + len(options_by_key))
-            try:
-                account_head_range = sheets_client.sync_lookup_column(
-                    settings.RECEIPT_PAYMENT_SHEET_ID, _LOOKUP_WORKSHEET, column_letter,
-                    header=header, values=account_heads,
-                )
-            except Exception as exc:
-                logger.error(
-                    f"[{run_id}] Failed to sync Account Head lookup tab for company={company!r} "
-                    f"keywords={keywords!r}: {exc}"
-                )
-                ledger_repository.log_audit(
-                    run_id, "error", "Failed to sync Account Head lookup tab",
-                    {"company": company, "keywords": list(keywords), "error": str(exc)},
-                )
-        parent_account_heads = [""] + master_repository.list_all_parent_account_heads(company)
-        options_by_key[key] = (account_head_range, parent_account_heads)
-        return options_by_key[key]
+    account_head_lookup_cache = {} if account_head_lookup_cache is None else account_head_lookup_cache
+    parent_account_heads_by_company: dict[str | None, list[str]] = {}
 
     flags = []
     for txn, link_ref_code in eligible:
@@ -1275,9 +1368,13 @@ def _attach_unresolved_full_dropdowns(transactions: list[TransactionRowSet], set
 
         company = master_repository.resolve_company(txn.source_sheet)
         matched_keywords = _matched_account_head_keywords(txn)
-        account_head_range, parent_account_heads = _options_for(company, matched_keywords)
+        account_head_range = _sync_account_head_lookup_range(
+            account_head_lookup_cache, settings, run_id, company, matched_keywords
+        )
         if not account_head_range:
             continue
+        if company not in parent_account_heads_by_company:
+            parent_account_heads_by_company[company] = [""] + master_repository.list_all_parent_account_heads(company)
 
         flags.append({
             "row_number": row_number, "column": "Account Head",
@@ -1285,7 +1382,7 @@ def _attach_unresolved_full_dropdowns(transactions: list[TransactionRowSet], set
         })
         flags.append({
             "row_number": row_number, "column": "Parent Account Head",
-            "dropdown_values": parent_account_heads,
+            "dropdown_values": parent_account_heads_by_company[company],
         })
 
     if not flags:
@@ -1460,8 +1557,15 @@ def _run_automation_stream_body(dry_run: bool, rows: list[dict] | None, run_id: 
         # yielding its final result - this is the structural backstop for
         # that guarantee, on top of _attach_ambiguous_dropdowns' own
         # per-transaction retry/logging.
+        # Shared across both calls below (not one dict each) - both sync
+        # keyword/full Account Head lists into the same Lookup helper tab,
+        # assigning the next unused column in encounter order; two separate
+        # caches could both start at column "A" for two different (company,
+        # keywords) combos in the same run, and the second sync would
+        # silently overwrite the first's already-referenced source range.
+        account_head_lookup_cache: dict = {}
         try:
-            _attach_ambiguous_dropdowns(transactions, settings, run_id)
+            _attach_ambiguous_dropdowns(transactions, settings, run_id, account_head_lookup_cache)
         except Exception as exc:
             logger.error(f"[{run_id}] Attaching ambiguous Account Head dropdowns failed: {exc}")
             ledger_repository.log_audit(
@@ -1475,7 +1579,7 @@ def _run_automation_stream_body(dry_run: bool, rows: list[dict] | None, run_id: 
                 run_id, "error", "Attaching no-match Account Head dropdowns failed", {"error": str(exc)}
             )
         try:
-            _attach_unresolved_full_dropdowns(transactions, settings, run_id)
+            _attach_unresolved_full_dropdowns(transactions, settings, run_id, account_head_lookup_cache)
         except Exception as exc:
             logger.error(f"[{run_id}] Attaching unresolved full dropdowns failed: {exc}")
             ledger_repository.log_audit(

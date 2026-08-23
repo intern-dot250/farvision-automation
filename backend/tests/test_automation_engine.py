@@ -11,6 +11,7 @@ from app.services.automation_engine import (
     _NO_MATCH_ACCOUNT_HEAD_NOTE,
     _attach_unresolved_full_dropdowns,
     _UNRESOLVED_ACCOUNT_HEAD_NOTE,
+    _KEYWORD_SCOPED_ACCOUNT_HEAD_NOTE,
     _attach_tax_info_description_dropdowns,
     _build_deposit_withdrawal_rows,
     _build_receipt_payment_rows,
@@ -2125,6 +2126,83 @@ def test_attach_ambiguous_dropdowns_survives_find_row_number_failure():
     assert mock_log.call_args.args[1] == "error"
 
 
+def test_attach_ambiguous_dropdowns_uses_keyword_scoped_dropdown_for_category_shaped_payee():
+    # "CREDITOR - AR" fuzzy-matched 2 real Master rows, but the text itself
+    # is a category label ("Credit"), not a specific vendor/person - the
+    # keyword-scoped dropdown should replace the narrow 2-candidate one.
+    txn = _ambiguous_txn(_CANDIDATES)
+    txn.classification.payee_name = "CREDITOR - AR"
+
+    with _patched_master_repository(), _patched_sync_lookup_column(range_value="=Lookup!A2:A3") as mock_sync, patch(
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk", return_value={"42": 5}
+    ), patch(
+        "app.services.automation_engine.sheets_client.column_letter_for", return_value="B"
+    ), patch(
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags"
+    ) as mock_batch:
+        _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")
+
+    mock_sync.assert_called_once_with(
+        "rp-sheet-id", "Lookup", "A", header="DPL Account Heads (Credit)", values=_CREDIT_ACCOUNT_HEADS,
+    )
+    flags = mock_batch.call_args.args[2]
+    account_head_flag = next(f for f in flags if f["column"] == "Account Head")
+    assert account_head_flag["dropdown_range"] == "=Lookup!A2:A3"
+    assert "dropdown_values" not in account_head_flag
+    assert account_head_flag["note_text"] == _KEYWORD_SCOPED_ACCOUNT_HEAD_NOTE
+    parent_flag = next(f for f in flags if f["column"] == "Parent Account Head")
+    assert parent_flag["dropdown_values"][0] == ""
+    assert "formula" not in parent_flag
+
+
+def test_attach_ambiguous_dropdowns_keyword_scoping_never_writes_a_formula():
+    txn = _ambiguous_txn(_CANDIDATES)
+    txn.classification.payee_name = "CREDITOR - AR"
+
+    with _patched_master_repository(), _patched_sync_lookup_column(), patch(
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk", return_value={"42": 5}
+    ), patch(
+        "app.services.automation_engine.sheets_client.column_letter_for", return_value="B"
+    ), patch(
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags"
+    ) as mock_batch:
+        _attach_ambiguous_dropdowns([txn], _FakeSettings(), run_id="test-run")
+
+    flags = mock_batch.call_args.args[2]
+    assert all("formula" not in f for f in flags)
+
+
+def test_attach_ambiguous_and_unresolved_dropdowns_share_lookup_column_cache():
+    # A shared cache (as run_automation_stream now passes) must sync each
+    # distinct (company, keywords) combo only once and never let the two
+    # attach steps collide on the same Lookup tab column.
+    ambiguous_txn = _ambiguous_txn(_CANDIDATES, link_ref_code=42)
+    ambiguous_txn.classification.payee_name = "CREDITOR - AR"
+    unresolved_txn = _unresolved_txn(link_ref_code=91, description="CREDIT ADJUSTMENT ENTRY")
+
+    shared_cache = {}
+    with _patched_master_repository(), _patched_sync_lookup_column(range_value="=Lookup!A2:A3") as mock_sync, patch(
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk", return_value={"42": 5}
+    ), patch(
+        "app.services.automation_engine.sheets_client.column_letter_for", return_value="B"
+    ), patch(
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags"
+    ):
+        _attach_ambiguous_dropdowns([ambiguous_txn], _FakeSettings(), run_id="test-run", account_head_lookup_cache=shared_cache)
+
+        with patch(
+            "app.services.automation_engine.sheets_client.find_row_numbers_bulk", return_value={"91": 92}
+        ):
+            _attach_unresolved_full_dropdowns(
+                [unresolved_txn], _FakeSettings(), run_id="test-run", account_head_lookup_cache=shared_cache
+            )
+
+    # Both transactions matched the same "Credit" keyword for the same
+    # company - the second call reuses the cached range instead of
+    # re-syncing (which would otherwise overwrite column "A" a second time).
+    mock_sync.assert_called_once()
+
+
 def test_attach_ambiguous_dropdowns_skips_deposit_withdrawal_destination():
     # Deposit/Withdrawal's LedgerDetails Account Head is the counterparty
     # bank name, not a beneficiary head - never eligible for this dropdown.
@@ -2290,6 +2368,7 @@ _ALL_PARENT_ACCOUNT_HEADS = ["", "SALARY PAYABLE", "SUNDRY CREDITORS - OTHER"]
 _ACCOUNT_HEAD_LOOKUP_RANGE = "=Lookup!A2:A4"
 _GST_ACCOUNT_HEADS = ["CGST Cash Ledger", "SGST Cash Ledger"]
 _TDS_ACCOUNT_HEADS = ["194 Q TDS on Goods"]
+_CREDIT_ACCOUNT_HEADS = ["CENVAT CREDIT SUSPENSE A/C", "CREDITOR - AR"]
 
 
 def _unresolved_txn(destination="receipt_payment", link_ref_code=91, description=None, narration="", **overrides):
@@ -2311,6 +2390,8 @@ def _keyword_account_heads(keywords, company):
             matched.update(_GST_ACCOUNT_HEADS)
         elif keyword.upper() == "TDS":
             matched.update(_TDS_ACCOUNT_HEADS)
+        elif keyword.upper() == "CREDIT":
+            matched.update(_CREDIT_ACCOUNT_HEADS)
     return sorted(matched)
 
 
