@@ -1137,6 +1137,30 @@ _UNRESOLVED_ACCOUNT_HEAD_NOTE = (
 # different spreadsheet (STATEMENT_MASTER_SHEET_ID).
 _LOOKUP_WORKSHEET = "Lookup"
 
+# When a genuinely-unresolved row's own narration already hints at the
+# right category, the Account Head dropdown is narrowed to only the Master
+# entries that also contain that word, instead of the full ~7,800-value
+# list - e.g. row 35's "GSGSTTAX ...GST POOL ACCOUNT" narrows to the ~90-94
+# real Master entries containing "GST". Confirmed live: TDS alone already
+# matches ~600 Master entries per company - over the ~500-value inline
+# dropdown cap - so keyword-scoped lists reuse the same ONE_OF_RANGE/Lookup-
+# tab mechanism as the full list, not a plain inline dropdown, regardless of
+# how small a given keyword's match count happens to be.
+_NARRATION_ACCOUNT_HEAD_KEYWORDS = ["GST", "TDS", "Credit"]
+
+
+def _matched_account_head_keywords(txn: TransactionRowSet) -> tuple[str, ...]:
+    """Every keyword from _NARRATION_ACCOUNT_HEAD_KEYWORDS found
+    (case-insensitive substring) in this transaction's own narration or raw
+    description - checked against both since either can carry the hint a
+    Master lookup itself already failed to use (description is the raw bank
+    text; narration is the app's own display text, sometimes built from
+    other source columns the raw description never had - see classifier.
+    _extract_from_narration for the same reasoning). Returns a sorted tuple
+    so it's directly usable as a stable dict cache key."""
+    haystack = f"{txn.description} {txn.narration}".upper()
+    return tuple(sorted(kw for kw in _NARRATION_ACCOUNT_HEAD_KEYWORDS if kw.upper() in haystack))
+
 
 def _attach_unresolved_full_dropdowns(transactions: list[TransactionRowSet], settings, run_id: str) -> None:
     """After a real (non-dry-run) write, attach full Master-wide dropdowns to
@@ -1147,12 +1171,15 @@ def _attach_unresolved_full_dropdowns(transactions: list[TransactionRowSet], set
     those rows are left as a silent blank cell with nothing to click (e.g. a
     self-transfer narration like "GSGSTTAX ...TRANSFER TO...GST POOL
     ACCOUNT"). Account Head gets a range-based dropdown sourced from the
-    _LOOKUP_WORKSHEET helper tab (synced fresh below from every distinct
-    Master Account Head value for each company actually seen this run), and
-    Parent Account Head gets the real, small category list (~44 values per
-    company, well within the inline dropdown cap) plus an explicit leading
-    blank choice for an Account Head that has no real parent -
-    master_repository.list_all_account_heads()/list_all_parent_account_heads().
+    _LOOKUP_WORKSHEET helper tab (synced fresh below - the full Master
+    Account Head list for this company, narrowed to a
+    _NARRATION_ACCOUNT_HEAD_KEYWORDS-filtered subset when the transaction's
+    own narration/description already hints at one, see
+    _matched_account_head_keywords), and Parent Account Head gets the real,
+    small category list (~44 values per company, well within the inline
+    dropdown cap) plus an explicit leading blank choice for an Account Head
+    that has no real parent - master_repository.list_all_account_heads()/
+    list_account_heads_matching_keywords()/list_all_parent_account_heads().
 
     Parent Account Head is independently pickable here, unlike in
     _attach_ambiguous_dropdowns (see account_head_resolver.dropdown_targets'
@@ -1164,9 +1191,10 @@ def _attach_unresolved_full_dropdowns(transactions: list[TransactionRowSet], set
 
     Same batched-lookup, single-batch-write, retry-twice, logged-but-never-
     blocking contract as its two siblings above - except the lookup-tab sync
-    itself (one Sheets write per distinct company, not per row) happens
-    first and isn't retried on its own; if it fails, this whole step is
-    skipped and logged, exactly like the row-lookup failure path below.
+    itself (one Sheets write per distinct (company, matched keywords) combo,
+    not per row) happens first and isn't retried on its own; if it fails,
+    this whole step is skipped and logged, exactly like the row-lookup
+    failure path below.
     """
     eligible = []
     for txn in transactions:
@@ -1202,29 +1230,38 @@ def _attach_unresolved_full_dropdowns(transactions: list[TransactionRowSet], set
         )
         return
 
-    options_by_company: dict[str | None, tuple[str | None, list[str]]] = {}
+    options_by_key: dict[tuple[str | None, tuple[str, ...]], tuple[str | None, list[str]]] = {}
 
-    def _options_for(company: str | None) -> tuple[str | None, list[str]]:
-        if company in options_by_company:
-            return options_by_company[company]
-        account_heads = master_repository.list_all_account_heads(company)
+    def _options_for(company: str | None, keywords: tuple[str, ...]) -> tuple[str | None, list[str]]:
+        key = (company, keywords)
+        if key in options_by_key:
+            return options_by_key[key]
+        if keywords:
+            account_heads = master_repository.list_account_heads_matching_keywords(list(keywords), company)
+            header = f"{company or 'All'} Account Heads ({'/'.join(keywords)})"
+        else:
+            account_heads = master_repository.list_all_account_heads(company)
+            header = f"{company or 'All'} Account Heads"
         account_head_range = None
         if account_heads:
-            column_letter = chr(ord("A") + len(options_by_company))
+            column_letter = chr(ord("A") + len(options_by_key))
             try:
                 account_head_range = sheets_client.sync_lookup_column(
                     settings.RECEIPT_PAYMENT_SHEET_ID, _LOOKUP_WORKSHEET, column_letter,
-                    header=f"{company or 'All'} Account Heads", values=account_heads,
+                    header=header, values=account_heads,
                 )
             except Exception as exc:
-                logger.error(f"[{run_id}] Failed to sync Account Head lookup tab for company={company!r}: {exc}")
+                logger.error(
+                    f"[{run_id}] Failed to sync Account Head lookup tab for company={company!r} "
+                    f"keywords={keywords!r}: {exc}"
+                )
                 ledger_repository.log_audit(
                     run_id, "error", "Failed to sync Account Head lookup tab",
-                    {"company": company, "error": str(exc)},
+                    {"company": company, "keywords": list(keywords), "error": str(exc)},
                 )
         parent_account_heads = [""] + master_repository.list_all_parent_account_heads(company)
-        options_by_company[company] = (account_head_range, parent_account_heads)
-        return options_by_company[company]
+        options_by_key[key] = (account_head_range, parent_account_heads)
+        return options_by_key[key]
 
     flags = []
     for txn, link_ref_code in eligible:
@@ -1237,7 +1274,8 @@ def _attach_unresolved_full_dropdowns(transactions: list[TransactionRowSet], set
             continue
 
         company = master_repository.resolve_company(txn.source_sheet)
-        account_head_range, parent_account_heads = _options_for(company)
+        matched_keywords = _matched_account_head_keywords(txn)
+        account_head_range, parent_account_heads = _options_for(company, matched_keywords)
         if not account_head_range:
             continue
 

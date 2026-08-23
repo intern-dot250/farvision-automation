@@ -2288,15 +2288,30 @@ def test_attach_no_match_dropdowns_survives_find_row_number_failure():
 _ALL_ACCOUNT_HEADS = ["Ashish Gaur(157)", "Bharat Singh(406)", "Some Vendor"]
 _ALL_PARENT_ACCOUNT_HEADS = ["", "SALARY PAYABLE", "SUNDRY CREDITORS - OTHER"]
 _ACCOUNT_HEAD_LOOKUP_RANGE = "=Lookup!A2:A4"
+_GST_ACCOUNT_HEADS = ["CGST Cash Ledger", "SGST Cash Ledger"]
+_TDS_ACCOUNT_HEADS = ["194 Q TDS on Goods"]
 
 
-def _unresolved_txn(destination="receipt_payment", link_ref_code=91, **overrides):
+def _unresolved_txn(destination="receipt_payment", link_ref_code=91, description=None, narration="", **overrides):
     txn = _receipt_payment_txn("Unclassified", None)
+    if description is not None:
+        txn.description = description
+    txn.narration = narration
     txn.destination = destination
     txn.rows = {"LedgerDetails": [{"Link Ref Code": link_ref_code}]}
     for key, value in overrides.items():
         setattr(txn.classification, key, value)
     return txn
+
+
+def _keyword_account_heads(keywords, company):
+    matched = set()
+    for keyword in keywords:
+        if keyword.upper() == "GST":
+            matched.update(_GST_ACCOUNT_HEADS)
+        elif keyword.upper() == "TDS":
+            matched.update(_TDS_ACCOUNT_HEADS)
+    return sorted(matched)
 
 
 def _patched_master_repository():
@@ -2305,6 +2320,7 @@ def _patched_master_repository():
         resolve_company=lambda source_sheet: "DPL",
         list_all_account_heads=lambda company: _ALL_ACCOUNT_HEADS,
         list_all_parent_account_heads=lambda company: _ALL_PARENT_ACCOUNT_HEADS[1:],
+        list_account_heads_matching_keywords=_keyword_account_heads,
     )
 
 
@@ -2357,6 +2373,90 @@ def test_attach_unresolved_full_dropdowns_syncs_lookup_tab_once_per_distinct_com
     # Both transactions resolve to the same (mocked) company "DPL" - the
     # lookup tab should be synced once, not once per row.
     mock_sync.assert_called_once()
+
+
+def test_attach_unresolved_full_dropdowns_scopes_to_gst_keyword_when_narration_mentions_it():
+    txn = _unresolved_txn(description="GSGSTTAX 260806...TRANSFER TO...GST POOL ACCOUNT")
+
+    with _patched_master_repository(), _patched_sync_lookup_column() as mock_sync, patch(
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk", return_value={"91": 92}
+    ), patch(
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags"
+    ):
+        _attach_unresolved_full_dropdowns([txn], _FakeSettings(), run_id="test-run")
+
+    mock_sync.assert_called_once_with(
+        "rp-sheet-id", "Lookup", "A", header="DPL Account Heads (GST)", values=_GST_ACCOUNT_HEADS,
+    )
+
+
+def test_attach_unresolved_full_dropdowns_scopes_to_narration_field_too():
+    # The keyword hint can come from the app's own display narration even
+    # when the raw bank description doesn't carry it - same reasoning as
+    # classifier._extract_from_narration.
+    txn = _unresolved_txn(description="SOME OPAQUE REF", narration="Purpose: TDS on Contractor")
+
+    with _patched_master_repository(), _patched_sync_lookup_column() as mock_sync, patch(
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk", return_value={"91": 92}
+    ), patch(
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags"
+    ):
+        _attach_unresolved_full_dropdowns([txn], _FakeSettings(), run_id="test-run")
+
+    mock_sync.assert_called_once_with(
+        "rp-sheet-id", "Lookup", "A", header="DPL Account Heads (TDS)", values=_TDS_ACCOUNT_HEADS,
+    )
+
+
+def test_attach_unresolved_full_dropdowns_unions_multiple_matched_keywords():
+    txn = _unresolved_txn(description="GST AND TDS ADJUSTMENT ENTRY")
+
+    with _patched_master_repository(), _patched_sync_lookup_column() as mock_sync, patch(
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk", return_value={"91": 92}
+    ), patch(
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags"
+    ):
+        _attach_unresolved_full_dropdowns([txn], _FakeSettings(), run_id="test-run")
+
+    mock_sync.assert_called_once_with(
+        "rp-sheet-id", "Lookup", "A", header="DPL Account Heads (GST/TDS)",
+        values=sorted(set(_GST_ACCOUNT_HEADS) | set(_TDS_ACCOUNT_HEADS)),
+    )
+
+
+def test_attach_unresolved_full_dropdowns_falls_back_to_full_list_when_no_keyword_matches():
+    txn = _unresolved_txn(description="UNRELATED SELF TRANSFER NARRATION")
+
+    with _patched_master_repository(), _patched_sync_lookup_column() as mock_sync, patch(
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk", return_value={"91": 92}
+    ), patch(
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags"
+    ):
+        _attach_unresolved_full_dropdowns([txn], _FakeSettings(), run_id="test-run")
+
+    mock_sync.assert_called_once_with(
+        "rp-sheet-id", "Lookup", "A", header="DPL Account Heads", values=_ALL_ACCOUNT_HEADS,
+    )
+
+
+def test_attach_unresolved_full_dropdowns_syncs_lookup_tab_once_per_distinct_keyword_combo():
+    gst_txn = _unresolved_txn(link_ref_code=91, description="GST ENTRY")
+    tds_txn = _unresolved_txn(link_ref_code=92, description="TDS ENTRY")
+
+    with _patched_master_repository(), _patched_sync_lookup_column() as mock_sync, patch(
+        "app.services.automation_engine.sheets_client.find_row_numbers_bulk",
+        return_value={"91": 92, "92": 93},
+    ), patch(
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags"
+    ):
+        _attach_unresolved_full_dropdowns([gst_txn, tds_txn], _FakeSettings(), run_id="test-run")
+
+    # Different matched-keyword sets for the same company - each combo gets
+    # its own sync/column, distinct from a single shared "all Account Heads"
+    # sync.
+    assert mock_sync.call_count == 2
+    columns_used = {call.args[2] for call in mock_sync.call_args_list}
+    assert columns_used == {"A", "B"}
 
 
 def test_attach_unresolved_full_dropdowns_includes_blank_option_for_parent_account_head():

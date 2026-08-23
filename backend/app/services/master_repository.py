@@ -672,6 +672,30 @@ def list_all_account_heads(company: str | None = "DPL") -> list[str]:
     return sorted(heads)
 
 
+def list_account_heads_matching_keywords(keywords: list[str], company: str | None = "DPL") -> list[str]:
+    """Every distinct Account Head value containing any of `keywords`
+    (case-insensitive substring match) - a narrower option list than
+    list_all_account_heads() for when a dead-end transaction's own
+    narration already hints at the right category (e.g. "GST" appears in
+    both the narration and the real Master entries like "CGST Cash
+    Ledger"). Company-scoped the same way as every other lookup in this
+    file. Returns [] if `keywords` is empty or none match."""
+    if not keywords:
+        return []
+    df = _load_master_df()
+    if "Account Head" not in df.columns:
+        return []
+    company_mask = None
+    if company and "Company" in df.columns:
+        company_mask = df["Company"].astype(str).str.strip().str.upper() == company.strip().upper()
+    values = df["Account Head"] if company_mask is None else df.loc[company_mask, "Account Head"]
+    upper_values = values.astype(str).str.upper()
+    upper_keywords = [k.upper() for k in keywords if k]
+    keyword_mask = upper_values.apply(lambda v: any(k in v for k in upper_keywords))
+    heads = {str(value).strip() for value in values[keyword_mask] if str(value).strip()}
+    return sorted(heads)
+
+
 def list_all_parent_account_heads(company: str | None = "DPL") -> list[str]:
     """Every distinct Parent Account Head value Master has on file - the
     real, small category list (confirmed live: ~44 values per company) used

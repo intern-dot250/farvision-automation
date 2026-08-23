@@ -531,6 +531,54 @@ def test_list_all_account_heads_returns_empty_when_column_missing(monkeypatch):
     assert master_repository.list_all_account_heads(company="DPL") == []
 
 
+def test_list_account_heads_matching_keywords_matches_any_keyword_case_insensitively(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [
+            {"Company": "DPL", "Account Head": "CGST Cash Ledger", "Parent Account Head": "GST PAYABLE"},
+            {"Company": "DPL", "Account Head": "194 Q TDS on Goods", "Parent Account Head": "TDS PAYABLE"},
+            {"Company": "DPL", "Account Head": "Bharat Singh(406)", "Parent Account Head": "SALARY PAYABLE"},
+            {"Company": "DPL", "Account Head": "gst reconciliation a/c", "Parent Account Head": "GST PAYABLE"},
+        ]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    result = master_repository.list_account_heads_matching_keywords(["GST", "TDS"], company="DPL")
+
+    assert result == ["194 Q TDS on Goods", "CGST Cash Ledger", "gst reconciliation a/c"]
+
+
+def test_list_account_heads_matching_keywords_scoped_by_company(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [
+            {"Company": "DPL", "Account Head": "CGST Cash Ledger", "Parent Account Head": "GST PAYABLE"},
+            {"Company": "AMB", "Account Head": "SGST Cash Ledger", "Parent Account Head": "GST PAYABLE"},
+        ]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    result = master_repository.list_account_heads_matching_keywords(["GST"], company="DPL")
+
+    assert result == ["CGST Cash Ledger"]
+
+
+def test_list_account_heads_matching_keywords_returns_empty_for_no_match(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [{"Company": "DPL", "Account Head": "Bharat Singh(406)", "Parent Account Head": "SALARY PAYABLE"}]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    assert master_repository.list_account_heads_matching_keywords(["GST"], company="DPL") == []
+
+
+def test_list_account_heads_matching_keywords_returns_empty_for_no_keywords(monkeypatch):
+    df = pd.DataFrame.from_records(
+        [{"Company": "DPL", "Account Head": "CGST Cash Ledger", "Parent Account Head": "GST PAYABLE"}]
+    )
+    monkeypatch.setattr(master_repository, "_load_master_df", lambda: df)
+
+    assert master_repository.list_account_heads_matching_keywords([], company="DPL") == []
+
+
 def test_list_all_parent_account_heads_returns_sorted_deduped_values(monkeypatch):
     df = pd.DataFrame.from_records(
         [
