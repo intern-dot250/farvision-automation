@@ -80,3 +80,10 @@ Columns: `Company, Account Head, Parent Account Head, Document Type, Financial Y
 
 - The exact Master column(s) used to turn a matched row into a specific HEAD label (`Contractor` vs `Vendor` vs others) — likely `Parent Account Head`, to be finalized against real data while building the classifier, since the demo Master data looks partly synthetic (sequential dummy `Financial Year` values) and shouldn't be over-trusted row-for-row.
 - Exactly which Master column recognizes "one of our own bank accounts" for Internal detection (e.g. is there a dedicated indicator, or is it purely "no match found" + description keyword check like `internal`/`TPT`).
+
+## 7. See also
+
+The Master-matching rule in section 5 has since grown into a full multi-layer resolution
+system (fuzzy-match tiers, ambiguous/no-match/dead-end dropdowns, keyword scoping) —
+see [`docs/account-head-resolution-rules.md`](account-head-resolution-rules.md) for the
+current decision rules governing it.
