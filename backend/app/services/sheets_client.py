@@ -1,3 +1,4 @@
+import re
 import time
 from functools import lru_cache
 from pathlib import Path
@@ -191,6 +192,40 @@ def clear_worksheet_cache() -> None:
 
 def list_worksheet_titles(sheet_id: str) -> list[str]:
     return [worksheet.title for worksheet in open_sheet(sheet_id).worksheets()]
+
+
+_SPREADSHEET_ID_RE = re.compile(r"/spreadsheets/d/([a-zA-Z0-9-_]+)")
+_BARE_ID_RE = re.compile(r"^[a-zA-Z0-9-_]+$")
+
+
+def extract_spreadsheet_id(url_or_id: str) -> str | None:
+    """Pulls a spreadsheet ID out of a pasted Google Sheets URL (any of its
+    usual forms - .../edit, .../edit#gid=..., .../view, no trailing path at
+    all), or accepts an already-bare ID typed/pasted directly. Returns None
+    for anything that's neither - the caller turns that into a clear
+    "invalid URL" message rather than trying to open garbage."""
+    if not url_or_id:
+        return None
+    candidate = url_or_id.strip()
+    match = _SPREADSHEET_ID_RE.search(candidate)
+    if match:
+        return match.group(1)
+    if _BARE_ID_RE.match(candidate) and "docs.google.com" not in candidate:
+        return candidate
+    return None
+
+
+def get_worksheet_values(sheet_id: str, worksheet_name: str, row_limit: int | None = None) -> list[list[str]]:
+    """Raw grid values for a worksheet (no header assumed) - used for tabs
+    whose shape isn't known ahead of time (an arbitrary externally-pasted
+    spreadsheet's tabs), unlike read_all_records() which requires a real
+    header row already in place. `row_limit`, when given, bounds the read to
+    just the first N rows (e.g. for header-detection previews) so a huge,
+    irrelevant tab isn't read in full just to check whether it looks like a
+    transaction sheet."""
+    worksheet = get_worksheet(sheet_id, worksheet_name)
+    range_name = f"A1:ZZ{row_limit}" if row_limit else None
+    return worksheet.get_values(range_name)
 
 
 def get_or_create_worksheet(

@@ -6,7 +6,9 @@ import { Badge } from "@/components/ui/badge";
 import { getStats, type StatsSummary } from "@/lib/api/history";
 import {
   clearSheetData,
+  getGoogleSheetTabs,
   getSheetNames,
+  runAutomationGoogleSheetStream,
   runAutomationUploadStream,
   type ClearSheetApiResponse,
   type ClearSheetTarget,
@@ -30,6 +32,11 @@ export default function DashboardPage() {
   const [ignoredSheets, setIgnoredSheets] = useState<string[]>([]);
   const [showIgnored, setShowIgnored] = useState(false);
   const [progress, setProgress] = useState<UploadProgress | null>(null);
+
+  const [sourceMode, setSourceMode] = useState<"file" | "google_sheet">("file");
+  const [sheetUrl, setSheetUrl] = useState("");
+  const [spreadsheetId, setSpreadsheetId] = useState<string | null>(null);
+  const [sheetUrlError, setSheetUrlError] = useState<string | null>(null);
 
   const [showClearPanel, setShowClearPanel] = useState(false);
   const [clearTarget, setClearTarget] = useState<ClearSheetTarget>("receipt_payment");
@@ -70,8 +77,7 @@ export default function DashboardPage() {
     return () => clearInterval(interval);
   }, [running]);
 
-  const handleFileChange = (selected: File | null) => {
-    setFile(selected);
+  const resetSheetSelectionState = () => {
     setResult(null);
     setRunError(null);
     setSheetOptions([]);
@@ -79,6 +85,20 @@ export default function DashboardPage() {
     setTotalSheets(0);
     setIgnoredSheets([]);
     setShowIgnored(false);
+  };
+
+  const handleSourceModeChange = (mode: "file" | "google_sheet") => {
+    setSourceMode(mode);
+    setFile(null);
+    setSheetUrl("");
+    setSpreadsheetId(null);
+    setSheetUrlError(null);
+    resetSheetSelectionState();
+  };
+
+  const handleFileChange = (selected: File | null) => {
+    setFile(selected);
+    resetSheetSelectionState();
 
     if (!selected || !/\.xlsx?$/i.test(selected.name)) {
       return;
@@ -100,22 +120,59 @@ export default function DashboardPage() {
       .finally(() => setSheetOptionsLoading(false));
   };
 
+  const handleLoadGoogleSheet = () => {
+    setSheetUrlError(null);
+    resetSheetSelectionState();
+    setSpreadsheetId(null);
+
+    if (!sheetUrl.trim()) {
+      setSheetUrlError("Please enter a valid Google Sheets URL.");
+      return;
+    }
+
+    setSheetOptionsLoading(true);
+    getGoogleSheetTabs(sheetUrl.trim())
+      .then((data) => {
+        setSpreadsheetId(data.spreadsheet_id);
+        setSheetOptions(data.sheets);
+        setTotalSheets(data.total_sheets);
+        setIgnoredSheets(data.ignored_sheets);
+        setSelectedSheetNames(data.sheets.slice(0, 1));
+      })
+      .catch((err) => {
+        setSheetUrlError(err instanceof Error ? err.message : "Please enter a valid Google Sheets URL.");
+      })
+      .finally(() => setSheetOptionsLoading(false));
+  };
+
   const handleRun = async (dryRun: boolean) => {
-    if (!file) return;
+    if (sourceMode === "file") {
+      if (!file) return;
+    } else {
+      if (!spreadsheetId || selectedSheetNames.length === 0) return;
+    }
 
     setRunning(true);
     setRunError(null);
     setProgress(null);
     try {
-      const response = await runAutomationUploadStream(
-        file,
-        dryRun,
-        undefined,
-        selectedSheetNames.length > 0 && selectedSheetNames.length < sheetOptions.length
-          ? selectedSheetNames
-          : undefined,
-        setProgress,
-      );
+      const response =
+        sourceMode === "file"
+          ? await runAutomationUploadStream(
+              file as File,
+              dryRun,
+              undefined,
+              selectedSheetNames.length > 0 && selectedSheetNames.length < sheetOptions.length
+                ? selectedSheetNames
+                : undefined,
+              setProgress,
+            )
+          : await runAutomationGoogleSheetStream(
+              spreadsheetId as string,
+              selectedSheetNames,
+              dryRun,
+              setProgress,
+            );
       setResult(response);
       loadStats();
     } catch (err) {
@@ -196,22 +253,78 @@ export default function DashboardPage() {
 
       <Card title="Upload Bank Statement">
         <div className="flex flex-col gap-4">
-          <label className="flex flex-col gap-2">
-            <span className="text-sm text-zinc-600 dark:text-zinc-400">
-              Statement file (.xlsx or .csv)
-            </span>
-            <input
-              type="file"
-              accept=".xlsx,.xls,.csv"
+          <div className="flex w-fit rounded-md border border-zinc-300 p-0.5 text-sm dark:border-zinc-700">
+            <button
+              type="button"
+              onClick={() => handleSourceModeChange("file")}
               disabled={running}
-              onChange={(e) => handleFileChange(e.target.files?.[0] ?? null)}
-              className="text-sm text-zinc-600 file:mr-3 file:rounded-md file:border-0 file:bg-zinc-900 file:px-3 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-zinc-700 dark:text-zinc-400 dark:file:bg-zinc-100 dark:file:text-zinc-900 dark:hover:file:bg-zinc-300"
-            />
-          </label>
+              className={`rounded px-3 py-1.5 font-medium transition-colors ${
+                sourceMode === "file"
+                  ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                  : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+              }`}
+            >
+              Upload File
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSourceModeChange("google_sheet")}
+              disabled={running}
+              className={`rounded px-3 py-1.5 font-medium transition-colors ${
+                sourceMode === "google_sheet"
+                  ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                  : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+              }`}
+            >
+              Google Sheet
+            </button>
+          </div>
+
+          {sourceMode === "file" ? (
+            <label className="flex flex-col gap-2">
+              <span className="text-sm text-zinc-600 dark:text-zinc-400">
+                Statement file (.xlsx or .csv)
+              </span>
+              <input
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                disabled={running}
+                onChange={(e) => handleFileChange(e.target.files?.[0] ?? null)}
+                className="text-sm text-zinc-600 file:mr-3 file:rounded-md file:border-0 file:bg-zinc-900 file:px-3 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-zinc-700 dark:text-zinc-400 dark:file:bg-zinc-100 dark:file:text-zinc-900 dark:hover:file:bg-zinc-300"
+              />
+            </label>
+          ) : (
+            <div className="flex flex-col gap-2">
+              <span className="text-sm text-zinc-600 dark:text-zinc-400">
+                Google Sheet URL
+              </span>
+              <div className="flex flex-wrap gap-2">
+                <input
+                  type="text"
+                  value={sheetUrl}
+                  disabled={running}
+                  onChange={(e) => setSheetUrl(e.target.value)}
+                  placeholder="https://docs.google.com/spreadsheets/d/…/edit"
+                  className="min-w-[280px] flex-1 rounded-md border border-zinc-300 px-3 py-2 text-sm text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+                />
+                <button
+                  type="button"
+                  onClick={handleLoadGoogleSheet}
+                  disabled={running || sheetOptionsLoading || !sheetUrl.trim()}
+                  className="w-fit rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+                >
+                  Load Sheet
+                </button>
+              </div>
+              {sheetUrlError && (
+                <p className="text-sm text-red-600 dark:text-red-400">{sheetUrlError}</p>
+              )}
+            </div>
+          )}
 
           {sheetOptionsLoading && (
             <p className="text-sm text-zinc-500 dark:text-zinc-400">
-              Reading sheet names…
+              {sourceMode === "file" ? "Reading sheet names…" : "Fetching spreadsheet…"}
             </p>
           )}
 
@@ -219,8 +332,10 @@ export default function DashboardPage() {
             <label className="flex flex-col gap-2">
               <span className="text-sm text-zinc-600 dark:text-zinc-400">
                 {selectedSheetNames.length === 0
-                  ? `${sheetOptions.length} sheets — processing all (nothing selected)`
-                  : selectedSheetNames.length === sheetOptions.length
+                  ? sourceMode === "google_sheet"
+                    ? "Please select at least one sheet to process."
+                    : `${sheetOptions.length} sheets — processing all (nothing selected)`
+                  : selectedSheetNames.length === sheetOptions.length && sourceMode === "file"
                     ? `${sheetOptions.length} sheets — processing all`
                     : `${selectedSheetNames.length} selected: ${selectedSheetNames.join(", ")}`}
               </span>
@@ -269,7 +384,8 @@ export default function DashboardPage() {
           {!sheetOptionsLoading && totalSheets > 0 && (
             <div className="flex flex-col gap-1 rounded-md border border-zinc-200 px-3 py-2 dark:border-zinc-800">
               <span className="text-sm text-zinc-600 dark:text-zinc-400">
-                {totalSheets} sheet{totalSheets === 1 ? "" : "s"} found in file
+                {totalSheets} sheet{totalSheets === 1 ? "" : "s"} found{" "}
+                {sourceMode === "file" ? "in file" : "in spreadsheet"}
                 {ignoredSheets.length > 0
                   ? ` — ${ignoredSheets.length} ignored (no transaction data detected)`
                   : " — all used"}
@@ -303,14 +419,22 @@ export default function DashboardPage() {
           <div className="flex flex-wrap gap-2">
             <button
               onClick={() => handleRun(true)}
-              disabled={running || !file || sheetOptionsLoading}
+              disabled={
+                running ||
+                sheetOptionsLoading ||
+                (sourceMode === "file" ? !file : !spreadsheetId || selectedSheetNames.length === 0)
+              }
               className="w-fit rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
             >
-              {running ? "Processing..." : "Preview Upload"}
+              {running ? "Processing..." : sourceMode === "file" ? "Preview Upload" : "Preview Selected Sheets"}
             </button>
             <button
               onClick={() => handleRun(false)}
-              disabled={running || !file || sheetOptionsLoading}
+              disabled={
+                running ||
+                sheetOptionsLoading ||
+                (sourceMode === "file" ? !file : !spreadsheetId || selectedSheetNames.length === 0)
+              }
               className="w-fit rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700 disabled:opacity-50 dark:bg-emerald-500 dark:hover:bg-emerald-600"
             >
               {running ? "Processing..." : "Write to Google Sheets"}

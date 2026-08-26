@@ -1,9 +1,15 @@
 import io
+from unittest.mock import patch
 
 import pandas as pd
 import pytest
 
-from app.services.statement_parser import list_candidate_sheets, parse_statement_file
+from app.services.statement_parser import (
+    list_candidate_sheets,
+    list_candidate_sheets_from_google,
+    parse_google_sheet_tabs,
+    parse_statement_file,
+)
 
 
 def test_parses_csv_with_required_columns():
@@ -426,3 +432,90 @@ def test_sheet_names_empty_list_is_treated_as_no_filter():
     rows = parse_statement_file("multi.xlsx", buffer.getvalue(), sheet_names=[])
 
     assert len(rows) == 2
+
+
+# --- list_candidate_sheets_from_google / parse_google_sheet_tabs: same
+# header-detection logic as the upload path, sourced from a live Google
+# Sheet (via sheets_client) instead of uploaded file bytes ---
+
+
+_TXN_HEADER_ROW = ["SL#", "TXN DATE", "DESCRIPTION", "REFERENCE", "DEBITS", "CREDITS"]
+
+
+def test_list_candidate_sheets_from_google_classifies_included_and_ignored():
+    values_by_tab = {
+        "YES Rera 0377": [_TXN_HEADER_ROW, ["1", "22-Jul-2026", "test", "REF1", "1000", ""]],
+        "Index": [["unrelated"], ["no transaction columns"]],
+    }
+
+    with patch(
+        "app.services.statement_parser.sheets_client.list_worksheet_titles",
+        return_value=["YES Rera 0377", "Index"],
+    ), patch(
+        "app.services.statement_parser.sheets_client.get_worksheet_values",
+        side_effect=lambda sheet_id, name, row_limit=None: values_by_tab[name],
+    ):
+        result = list_candidate_sheets_from_google("sheet-id")
+
+    assert result.included == ["YES Rera 0377"]
+    assert result.ignored == ["Index"]
+
+
+def test_list_candidate_sheets_from_google_handles_empty_tab():
+    with patch(
+        "app.services.statement_parser.sheets_client.list_worksheet_titles",
+        return_value=["Blank Tab"],
+    ), patch(
+        "app.services.statement_parser.sheets_client.get_worksheet_values",
+        return_value=[],
+    ):
+        result = list_candidate_sheets_from_google("sheet-id")
+
+    assert result.included == []
+    assert result.ignored == ["Blank Tab"]
+
+
+def test_parse_google_sheet_tabs_tags_source_sheet_and_returns_rows():
+    values_by_tab = {
+        "YES Rera 0377": [_TXN_HEADER_ROW, ["1", "22-Jul-2026", "test", "REF1", "1000", ""]],
+        "YES IDW 0490": [_TXN_HEADER_ROW, ["1", "22-Jul-2026", "test", "REF2", "500", ""]],
+    }
+
+    with patch(
+        "app.services.statement_parser.sheets_client.get_worksheet_values",
+        side_effect=lambda sheet_id, name, row_limit=None: values_by_tab[name],
+    ):
+        rows = parse_google_sheet_tabs("sheet-id", ["YES Rera 0377", "YES IDW 0490"])
+
+    assert len(rows) == 2
+    assert rows[0]["REFERENCE"] == "REF1"
+    assert rows[0]["source_sheet"] == "YES Rera 0377"
+    assert rows[1]["REFERENCE"] == "REF2"
+    assert rows[1]["source_sheet"] == "YES IDW 0490"
+
+
+def test_parse_google_sheet_tabs_drops_blank_and_brought_forward_rows():
+    values = [
+        _TXN_HEADER_ROW,
+        ["1", "22-Jul-2026", "test", "REF1", "1000", ""],
+        ["", "", "", "", "", ""],
+        ["2", "22-Jul-2026", "B/F Balance", "REF2", "500", ""],
+    ]
+
+    with patch(
+        "app.services.statement_parser.sheets_client.get_worksheet_values",
+        return_value=values,
+    ):
+        rows = parse_google_sheet_tabs("sheet-id", ["YES Rera 0377"])
+
+    assert len(rows) == 1
+    assert rows[0]["REFERENCE"] == "REF1"
+
+
+def test_parse_google_sheet_tabs_missing_header_raises_value_error():
+    with patch(
+        "app.services.statement_parser.sheets_client.get_worksheet_values",
+        return_value=[["unrelated", "columns"], ["a", "b"]],
+    ):
+        with pytest.raises(ValueError, match="missing required columns"):
+            parse_google_sheet_tabs("sheet-id", ["Index"])

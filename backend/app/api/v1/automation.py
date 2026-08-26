@@ -1,6 +1,7 @@
 import hmac
 import json
 
+import gspread
 from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 
@@ -9,11 +10,14 @@ from app.core.constants import Tags
 from app.schemas.automation import (
     ClearedSheet,
     ClearSheetResponse,
+    GoogleSheetRunRequest,
+    GoogleSheetTabsRequest,
+    GoogleSheetTabsResponse,
     RunResponse,
     SheetNamesResponse,
     TransactionSummary,
 )
-from app.services import automation_engine, statement_parser
+from app.services import automation_engine, sheets_client, statement_parser
 
 router = APIRouter(prefix="/automation", tags=[Tags.AUTOMATION])
 
@@ -70,6 +74,79 @@ async def list_sheet_names(file: UploadFile = File(...)) -> SheetNamesResponse:
         total_sheets=len(candidates.included) + len(candidates.ignored),
         ignored_sheets=candidates.ignored,
     )
+
+
+@router.post(
+    "/google-sheet-tabs",
+    response_model=GoogleSheetTabsResponse,
+    summary="Fetch a pasted Google Sheet's tabs and classify which contain transaction data",
+)
+def get_google_sheet_tabs(body: GoogleSheetTabsRequest) -> GoogleSheetTabsResponse:
+    spreadsheet_id = sheets_client.extract_spreadsheet_id(body.url)
+    if not spreadsheet_id:
+        raise HTTPException(status_code=400, detail="Please enter a valid Google Sheets URL.")
+
+    try:
+        spreadsheet = sheets_client.open_sheet(spreadsheet_id)
+    except (gspread.exceptions.SpreadsheetNotFound, gspread.exceptions.APIError) as exc:
+        raise HTTPException(
+            status_code=400, detail="Unable to access this Google Sheet. Please check the sheet permissions."
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Something went wrong while accessing this Google Sheet.") from exc
+
+    titles = sheets_client.list_worksheet_titles(spreadsheet_id)
+    if not titles:
+        raise HTTPException(status_code=400, detail="No sheets were found in this spreadsheet.")
+
+    try:
+        candidates = statement_parser.list_candidate_sheets_from_google(spreadsheet_id)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Something went wrong while reading this Google Sheet.") from exc
+
+    if not candidates.included:
+        raise HTTPException(status_code=400, detail="No sheets containing transaction data were found.")
+
+    return GoogleSheetTabsResponse(
+        spreadsheet_id=spreadsheet_id,
+        spreadsheet_title=spreadsheet.title,
+        sheets=candidates.included,
+        total_sheets=len(candidates.included) + len(candidates.ignored),
+        ignored_sheets=candidates.ignored,
+    )
+
+
+@router.post(
+    "/run-google-sheet-stream",
+    summary="Same as /run-upload-stream, but the input rows come from selected tabs of a pasted Google Sheet",
+)
+def run_automation_google_sheet_stream(body: GoogleSheetRunRequest, dry_run: bool = True) -> StreamingResponse:
+    if not body.sheet_names:
+        raise HTTPException(status_code=400, detail="Please select at least one sheet to process.")
+
+    try:
+        rows = statement_parser.parse_google_sheet_tabs(body.spreadsheet_id, body.sheet_names)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (gspread.exceptions.SpreadsheetNotFound, gspread.exceptions.APIError) as exc:
+        raise HTTPException(
+            status_code=400, detail="Unable to access this Google Sheet. Please check the sheet permissions."
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Something went wrong while reading this Google Sheet.") from exc
+
+    if not rows:
+        raise HTTPException(status_code=400, detail="Selected sheet(s) have no transaction rows")
+
+    def event_stream():
+        for event in automation_engine.run_automation_stream(dry_run=dry_run, rows=rows):
+            if event["type"] == "result":
+                response = _build_run_response(event["result"])
+                yield json.dumps({"type": "result", **response.model_dump()}) + "\n"
+            else:
+                yield json.dumps(event) + "\n"
+
+    return StreamingResponse(event_stream(), media_type="application/x-ndjson")
 
 
 @router.post("/run", response_model=RunResponse, summary="Run the automation engine against the configured Google Sheet")

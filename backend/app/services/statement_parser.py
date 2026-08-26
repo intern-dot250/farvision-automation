@@ -3,6 +3,8 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from app.services import sheets_client
+
 REQUIRED_COLUMNS = ["TXN DATE", "DESCRIPTION", "REFERENCE", "DEBITS", "CREDITS"]
 
 
@@ -32,6 +34,35 @@ def _apply_header(raw: pd.DataFrame, header_row: int) -> pd.DataFrame:
     return df
 
 
+def _drop_non_transaction_rows(records: list[dict]) -> list[dict]:
+    """Drops rows that survived header-slicing but aren't real transactions -
+    shared by parse_statement_file() and parse_google_sheet_tabs() so both
+    input sources apply the identical filter, not two copies of it.
+
+    Blank spacer rows: Accounts intentionally leaves blank spacer rows in
+    the source workbook (between sections) - drop them rather than trying to
+    classify them as failed transactions. Checked against REQUIRED_COLUMNS
+    specifically (not every column) - a spacer row can still carry stray
+    content in an unrelated column (a note, a leftover SL# tag, our own
+    synthetic "source_sheet" tag, etc.) and still be a spacer, since none of
+    that is actual transaction data.
+
+    "B/F" (Brought Forward) rows: a standard bank-statement convention
+    carrying the running balance from a previous period/page forward - not
+    a real transaction, regardless of which file/sheet was uploaded.
+    """
+    records = [
+        record
+        for record in records
+        if any(str(record.get(col, "")).strip() for col in REQUIRED_COLUMNS)
+    ]
+    return [
+        record
+        for record in records
+        if not str(record.get("DESCRIPTION", "")).strip().upper().startswith("B/F")
+    ]
+
+
 def _resolve_sheet_name(requested: str, available: list[str]) -> str | None:
     """Match a requested sheet/tab name case- and whitespace-insensitively
     (e.g. "YES RERA 0377" should still find "YES Rera 0377")."""
@@ -40,6 +71,54 @@ def _resolve_sheet_name(requested: str, available: list[str]) -> str | None:
         if " ".join(name.strip().upper().split()) == key:
             return name
     return None
+
+
+def list_candidate_sheets_from_google(sheet_id: str) -> SheetCandidates:
+    """Same classification as list_candidate_sheets(), but for a live Google
+    Sheet instead of an uploaded workbook - every tab in `sheet_id` is
+    split into "included" (a bounded preview read contains a row matching
+    REQUIRED_COLUMNS, via the exact same _find_header_row() used for
+    uploads) and "ignored" (everything else). Only the first
+    MAX_HEADER_SCAN_ROWS rows of each tab are read for this check (not the
+    whole tab) - a huge, irrelevant tab (e.g. a 15,000-row Master-style
+    reference sheet) would otherwise be read in full just to determine it
+    doesn't have a matching header.
+    """
+    titles = sheets_client.list_worksheet_titles(sheet_id)
+    included = []
+    for title in titles:
+        values = sheets_client.get_worksheet_values(sheet_id, title, row_limit=MAX_HEADER_SCAN_ROWS)
+        if not values:
+            continue
+        raw = pd.DataFrame(values)
+        if _find_header_row(raw) is not None:
+            included.append(title)
+    ignored = [title for title in titles if title not in included]
+    return SheetCandidates(included=included, ignored=ignored)
+
+
+def parse_google_sheet_tabs(sheet_id: str, sheet_names: list[str]) -> list[dict]:
+    """Parse specific tabs of a live Google Sheet into the same row-shape
+    parse_statement_file() produces from an uploaded workbook (same column
+    names, same source_sheet tagging, same trailing blank-row/B-F-row
+    filters) - so it feeds the same classify/route/write pipeline unchanged,
+    regardless of whether the transaction data came from an upload or a
+    pasted Google Sheet URL.
+    """
+    frames: list[pd.DataFrame] = []
+    for name in sheet_names:
+        values = sheets_client.get_worksheet_values(sheet_id, name)
+        raw = pd.DataFrame(values)
+        header_row = _find_header_row(raw)
+        if header_row is None:
+            raise ValueError(f"Sheet '{name}' is missing required columns: {', '.join(REQUIRED_COLUMNS)}")
+        sheet_df = _apply_header(raw, header_row)
+        sheet_df["source_sheet"] = name
+        frames.append(sheet_df)
+
+    df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    df = df.fillna("")
+    return _drop_non_transaction_rows(df.to_dict(orient="records"))
 
 
 def list_candidate_sheets(filename: str, content: bytes) -> SheetCandidates:
@@ -137,24 +216,4 @@ def parse_statement_file(filename: str, content: bytes, sheet_name: str | None =
                 offset += len(matched)
 
     df = df.fillna("")
-    records = df.to_dict(orient="records")
-    # Accounts intentionally leaves blank spacer rows in the source workbook
-    # (between sections) - drop them rather than trying to classify them as
-    # failed transactions. Checked against REQUIRED_COLUMNS specifically
-    # (not every column) - a spacer row can still carry stray content in an
-    # unrelated column (a note, a leftover SL# tag, our own synthetic
-    # "source_sheet" tag, etc.) and still be a spacer, since none of that is
-    # actual transaction data.
-    records = [
-        record
-        for record in records
-        if any(str(record.get(col, "")).strip() for col in REQUIRED_COLUMNS)
-    ]
-    # "B/F" (Brought Forward) rows are a standard bank-statement convention
-    # carrying the running balance from a previous period/page forward -
-    # not a real transaction, regardless of which file/sheet was uploaded.
-    return [
-        record
-        for record in records
-        if not str(record.get("DESCRIPTION", "")).strip().upper().startswith("B/F")
-    ]
+    return _drop_non_transaction_rows(df.to_dict(orient="records"))

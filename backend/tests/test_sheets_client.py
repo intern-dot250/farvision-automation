@@ -502,6 +502,60 @@ def test_sync_lookup_column_handles_empty_values(monkeypatch):
     assert result == "=Lookup!A2:A2"
 
 
+# --- extract_spreadsheet_id: parsing a pasted Google Sheets URL (or a bare
+# ID) into the spreadsheet ID used everywhere else in this module ---
+
+
+def test_extract_spreadsheet_id_from_edit_url():
+    url = "https://docs.google.com/spreadsheets/d/1fBwkpGZU2M9BTsJjpwKyTIYIZra1J43hlVt2PlQ0d9Q/edit?gid=0"
+    assert sheets_client.extract_spreadsheet_id(url) == "1fBwkpGZU2M9BTsJjpwKyTIYIZra1J43hlVt2PlQ0d9Q"
+
+
+def test_extract_spreadsheet_id_from_url_with_no_trailing_path():
+    url = "https://docs.google.com/spreadsheets/d/1fBwkpGZU2M9BTsJjpwKyTIYIZra1J43hlVt2PlQ0d9Q"
+    assert sheets_client.extract_spreadsheet_id(url) == "1fBwkpGZU2M9BTsJjpwKyTIYIZra1J43hlVt2PlQ0d9Q"
+
+
+def test_extract_spreadsheet_id_accepts_bare_id():
+    assert sheets_client.extract_spreadsheet_id("1fBwkpGZU2M9BTsJjpwKyTIYIZra1J43hlVt2PlQ0d9Q") == (
+        "1fBwkpGZU2M9BTsJjpwKyTIYIZra1J43hlVt2PlQ0d9Q"
+    )
+
+
+def test_extract_spreadsheet_id_returns_none_for_invalid_input():
+    assert sheets_client.extract_spreadsheet_id("not a url or id!") is None
+    assert sheets_client.extract_spreadsheet_id("") is None
+    assert sheets_client.extract_spreadsheet_id("https://docs.google.com/document/d/abc123") is None
+
+
+def test_extract_spreadsheet_id_returns_none_for_bare_domain():
+    assert sheets_client.extract_spreadsheet_id("https://docs.google.com/spreadsheets/") is None
+
+
+# --- get_worksheet_values: raw grid read, bounded or unbounded ---
+
+
+def test_get_worksheet_values_unbounded_reads_full_sheet(monkeypatch):
+    mock_ws = MagicMock()
+    mock_ws.get_values.return_value = [["a", "b"], ["1", "2"]]
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    result = sheets_client.get_worksheet_values("sheet1", "Tab1")
+
+    mock_ws.get_values.assert_called_once_with(None)
+    assert result == [["a", "b"], ["1", "2"]]
+
+
+def test_get_worksheet_values_bounded_uses_row_limit_range(monkeypatch):
+    mock_ws = MagicMock()
+    mock_ws.get_values.return_value = [["a", "b"]]
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    sheets_client.get_worksheet_values("sheet1", "Tab1", row_limit=10)
+
+    mock_ws.get_values.assert_called_once_with("A1:ZZ10")
+
+
 def test_add_dropdown_validation_calls_gspread_with_correct_range(monkeypatch):
     mock_ws = MagicMock()
     mock_ws.row_values.return_value = ["Link Ref Code", "Account Head", "Parent Account Head"]

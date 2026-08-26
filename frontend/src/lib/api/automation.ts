@@ -60,6 +60,32 @@ export async function getSheetNames(file: File): Promise<SheetNamesResponse> {
   return response.json() as Promise<SheetNamesResponse>;
 }
 
+export type GoogleSheetTabsResponse = {
+  spreadsheet_id: string;
+  spreadsheet_title: string | null;
+  sheets: string[];
+  total_sheets: number;
+  ignored_sheets: string[];
+};
+
+export async function getGoogleSheetTabs(url: string): Promise<GoogleSheetTabsResponse> {
+  const response = await fetch(`${API_BASE_URL}/automation/google-sheet-tabs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  });
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new ApiError(
+      response.status,
+      body?.detail ?? `Sheet lookup failed with status ${response.status}`,
+    );
+  }
+
+  return response.json() as Promise<GoogleSheetTabsResponse>;
+}
+
 export async function runAutomationUpload(
   file: File,
   dryRun: boolean,
@@ -119,6 +145,35 @@ export async function runAutomationUploadStream(
     },
   );
 
+  return readAutomationRunStream(response, onProgress);
+}
+
+export async function runAutomationGoogleSheetStream(
+  spreadsheetId: string,
+  sheetNames: string[],
+  dryRun: boolean,
+  onProgress: (progress: UploadProgress) => void,
+): Promise<RunResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/automation/run-google-sheet-stream?dry_run=${dryRun}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ spreadsheet_id: spreadsheetId, sheet_names: sheetNames }),
+    },
+  );
+
+  return readAutomationRunStream(response, onProgress);
+}
+
+// Shared by runAutomationUploadStream/runAutomationGoogleSheetStream - both
+// hit a StreamingResponse with the identical newline-delimited-JSON event
+// shape (progress/result/error), differing only in how the request itself
+// is built (multipart file upload vs. a plain JSON body).
+async function readAutomationRunStream(
+  response: Response,
+  onProgress: (progress: UploadProgress) => void,
+): Promise<RunResponse> {
   if (!response.ok) {
     const body = await response.json().catch(() => null);
     throw new ApiError(

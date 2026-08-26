@@ -35,6 +35,23 @@ class SheetNamesResponse(BaseModel):
     ignored_sheets: list[str]
 
 
+class GoogleSheetTabsRequest(BaseModel):
+    url: str
+
+
+class GoogleSheetTabsResponse(BaseModel):
+    spreadsheet_id: str
+    spreadsheet_title: str | None = None
+    sheets: list[str]
+    total_sheets: int
+    ignored_sheets: list[str]
+
+
+class GoogleSheetRunRequest(BaseModel):
+    spreadsheet_id: str
+    sheet_names: list[str]
+
+
 class ClearedSheet(BaseModel):
     sheet: str
     tabs_cleared: list[str]
