@@ -113,6 +113,7 @@ def get_google_sheet_tabs(body: GoogleSheetTabsRequest) -> GoogleSheetTabsRespon
         sheets=candidates.included,
         total_sheets=len(candidates.included) + len(candidates.ignored),
         ignored_sheets=candidates.ignored,
+        approval_columns=candidates.approval_columns,
     )
 
 
@@ -138,10 +139,31 @@ def run_automation_google_sheet_stream(body: GoogleSheetRunRequest, dry_run: boo
     if not rows:
         raise HTTPException(status_code=400, detail="Selected sheet(s) have no transaction rows")
 
+    # Approval gating only ever activates when the caller picked a real
+    # approval stage (the frontend's "No Approval Check" option sends
+    # approval_column: null, which is exactly this branch's else - today's
+    # already-shipped, byte-for-byte-identical no-gating behavior). Only
+    # approved rows reach the pipeline; not_approved_rows is written back as
+    # "Skipped (Approval Pending)" below, independently of the pipeline run.
+    not_approved_rows: list[dict] = []
+    if body.approval_column:
+        rows, not_approved_rows = statement_parser.split_rows_by_approval(rows, body.approval_column)
+
     def event_stream():
         for event in automation_engine.run_automation_stream(dry_run=dry_run, rows=rows):
             if event["type"] == "result":
-                response = _build_run_response(event["result"])
+                result = event["result"]
+                # Farvision Status write-back is a real, non-dry-run side
+                # effect on the source sheet - same "only after a real
+                # write" gate as every other post-write step in
+                # automation_engine.py. A failure here is logged but never
+                # raised (see write_farvision_status_back_for_run), so it
+                # can never turn a completed run into a stream error.
+                if body.approval_column and not dry_run:
+                    automation_engine.write_farvision_status_back_for_run(
+                        body.spreadsheet_id, result.transactions, not_approved_rows, result.run_id,
+                    )
+                response = _build_run_response(result)
                 yield json.dumps({"type": "result", **response.model_dump()}) + "\n"
             else:
                 yield json.dumps(event) + "\n"

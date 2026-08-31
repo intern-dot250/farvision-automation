@@ -66,6 +66,7 @@ export type GoogleSheetTabsResponse = {
   sheets: string[];
   total_sheets: number;
   ignored_sheets: string[];
+  approval_columns: string[];
 };
 
 export async function getGoogleSheetTabs(url: string): Promise<GoogleSheetTabsResponse> {
@@ -153,13 +154,18 @@ export async function runAutomationGoogleSheetStream(
   sheetNames: string[],
   dryRun: boolean,
   onProgress: (progress: UploadProgress) => void,
+  approvalColumn?: string | null,
 ): Promise<RunResponse> {
   const response = await fetch(
     `${API_BASE_URL}/automation/run-google-sheet-stream?dry_run=${dryRun}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ spreadsheet_id: spreadsheetId, sheet_names: sheetNames }),
+      body: JSON.stringify({
+        spreadsheet_id: spreadsheetId,
+        sheet_names: sheetNames,
+        approval_column: approvalColumn ?? null,
+      }),
     },
   );
 

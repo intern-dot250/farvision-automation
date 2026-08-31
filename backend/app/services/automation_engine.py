@@ -14,6 +14,7 @@ from app.services import (
     override_rules_repository,
     ref_code,
     sheets_client,
+    statement_parser,
     validation,
 )
 from app.services.classifier import ClassificationResult
@@ -219,6 +220,7 @@ class TransactionRowSet:
     destination: str  # "deposit_withdrawal" | "receipt_payment" | "review" | "duplicate" | "error" | "skipped_internal_credit" | "skipped_collection"
     destination_sheet: str | None = None  # human-readable sheet name for duplicates
     source_sheet: str | None = None  # original sheet/tab name from uploaded file
+    source_row_number: int | None = None  # 1-indexed row on source_sheet - only set for Google Sheet input, used to write Farvision Status back
     review_reason: str | None = None
     rows: dict[str, list[dict]] = field(default_factory=dict)
     narration: str = ""  # display narration written to the ERP output - the source file's own NARRATION column when present, else falls back to description
@@ -561,6 +563,7 @@ def _process_rows_stream(bank_rows: list[dict], run_id: str, settings):
         sl_no = str(row.get("SL#", ""))
         reference = str(row.get("REFERENCE", "")).strip()
         source_sheet = str(row.get("source_sheet", "")).strip() or None
+        source_row_number = row.get("_source_row_number")
 
         # Extracted before the try block (rather than as its first line) so
         # it's always available in the except branch below too, regardless
@@ -630,6 +633,7 @@ def _process_rows_stream(bank_rows: list[dict], run_id: str, settings):
                         destination="duplicate",
                         destination_sheet="receipt/payment" if original_dest == "receipt_payment" else "deposit/withdrawal",
                         source_sheet=source_sheet,
+                        source_row_number=source_row_number,
                         narration=narration,
                     )
                 )
@@ -674,6 +678,7 @@ def _process_rows_stream(bank_rows: list[dict], run_id: str, settings):
                         classification=classification,
                         destination=destination,
                         source_sheet=source_sheet,
+                        source_row_number=source_row_number,
                         narration=narration,
                     )
                 )
@@ -698,6 +703,7 @@ def _process_rows_stream(bank_rows: list[dict], run_id: str, settings):
                     destination="error",
                     review_reason=str(exc),
                     source_sheet=source_sheet,
+                    source_row_number=source_row_number,
                     narration=str(row.get("NARRATION", "")).strip() or str(row.get("DESCRIPTION", "")),
                 )
             )
@@ -1475,6 +1481,135 @@ def _distinct_sheet_names(bank_rows: list[dict]) -> list[str]:
     chosen can span several) - empty for runs against the plain configured
     Google Sheet, which has no per-row "source_sheet" tag."""
     return sorted({row["source_sheet"] for row in bank_rows if row.get("source_sheet")})
+
+
+# Farvision Status values written back onto a source Google Sheet tab for an
+# approval-linked run - see write_farvision_status_back_for_run below. Each
+# reflects a genuinely different outcome already distinguished by
+# TransactionRowSet.destination (or, for FARVISION_STATUS_SKIPPED_APPROVAL,
+# by the approval gate that runs before the pipeline even sees the row) -
+# deliberately not collapsed into a single "Skipped", so the accounts team
+# can tell an approval-pending row apart from a real dedup/exclusion/error.
+FARVISION_STATUS_EXPORTED = statement_parser.FARVISION_STATUS_EXPORTED
+FARVISION_STATUS_SKIPPED_APPROVAL = "Skipped (Approval Pending)"
+FARVISION_STATUS_DUPLICATE = "Duplicate"
+FARVISION_STATUS_EXCLUDED_INTERNAL_CREDIT = "Excluded (Internal Credit)"
+FARVISION_STATUS_EXCLUDED_COLLECTION = "Excluded (Collection)"
+FARVISION_STATUS_NEEDS_REVIEW = "Needs Review"
+FARVISION_STATUS_ERROR = "Error"
+
+_DESTINATION_TO_FARVISION_STATUS = {
+    "receipt_payment": FARVISION_STATUS_EXPORTED,
+    "deposit_withdrawal": FARVISION_STATUS_EXPORTED,
+    "duplicate": FARVISION_STATUS_DUPLICATE,
+    "skipped_internal_credit": FARVISION_STATUS_EXCLUDED_INTERNAL_CREDIT,
+    "skipped_collection": FARVISION_STATUS_EXCLUDED_COLLECTION,
+    "review": FARVISION_STATUS_NEEDS_REVIEW,
+    "error": FARVISION_STATUS_ERROR,
+}
+
+
+def _farvision_status_for(txn: TransactionRowSet) -> str:
+    """Maps an already-computed transaction outcome to the Farvision Status
+    taxonomy - see _DESTINATION_TO_FARVISION_STATUS. destination is always
+    one of that mapping's keys by the time a transaction reaches here (set
+    exhaustively in _process_rows_stream/_assign_rows), so the fallback is
+    only a defensive backstop, never expected to trigger."""
+    return _DESTINATION_TO_FARVISION_STATUS.get(txn.destination, FARVISION_STATUS_NEEDS_REVIEW)
+
+
+def _write_farvision_status_back(
+    spreadsheet_id: str, entries_by_sheet: dict[str, list[tuple[int, str]]], run_id: str,
+) -> None:
+    """Writes the computed Farvision Status back onto the source Google
+    Sheet tab(s) rows were read from - a new, machine-owned column (created
+    via sheets_client.ensure_column if missing on that tab), safe to
+    overwrite on every run (unlike APPROVAL 1/2/3, which stay human-owned
+    and are never written to by this codebase). Reuses
+    sheets_client.batch_apply_cell_flags' existing "flags" write path (the
+    same one _attach_ambiguous_dropdowns/_attach_no_match_dropdowns already
+    use) for a "value" flag, so one row's worth of statuses become one
+    batched Sheets API write per tab, not one call per row.
+
+    Same non-blocking, retry-twice, logged-but-never-failing contract as
+    every other post-write cosmetic step in this file - this always runs
+    after the real ERP-output write has already happened (or, for
+    approval-rejected rows, never needed one), so a failure here must never
+    surface as a run failure. A failed write here only weakens next run's
+    idempotency guard (an already-exported row could be re-processed); the
+    existing duplicate-detection logic is the fallback safety net.
+    """
+    for sheet_name, entries in entries_by_sheet.items():
+        if not entries:
+            continue
+        try:
+            sheets_client.ensure_column(spreadsheet_id, sheet_name, statement_parser.FARVISION_STATUS_COLUMN)
+        except Exception as exc:
+            logger.error(f"[{run_id}] Failed to ensure Farvision Status column on '{sheet_name}': {exc}")
+            ledger_repository.log_audit(
+                run_id, "error", "Failed to ensure Farvision Status column",
+                {"sheet": sheet_name, "error": str(exc)},
+            )
+            continue
+
+        flags = [
+            {"row_number": row_number, "column": statement_parser.FARVISION_STATUS_COLUMN, "value": status}
+            for row_number, status in entries
+        ]
+        for attempt in (1, 2):
+            try:
+                sheets_client.batch_apply_cell_flags(spreadsheet_id, sheet_name, flags)
+                break
+            except Exception as exc:
+                if attempt < 2:
+                    continue
+                logger.error(
+                    f"[{run_id}] Failed to write Farvision Status back to '{sheet_name}' for "
+                    f"{len(flags)} row(s): {exc}"
+                )
+                ledger_repository.log_audit(
+                    run_id, "error", "Failed to write Farvision Status back",
+                    {"sheet": sheet_name, "row_count": len(flags), "error": str(exc)},
+                )
+
+
+def write_farvision_status_back_for_run(
+    spreadsheet_id: str,
+    transactions: list["TransactionRowSet"],
+    not_approved_rows: list[dict],
+    run_id: str,
+) -> None:
+    """Called by the /run-google-sheet-stream route (only for a real, non-
+    dry-run write, and only when an approval_column was selected) after a
+    run completes. Computes each processed transaction's Farvision Status
+    (_farvision_status_for) plus FARVISION_STATUS_SKIPPED_APPROVAL for every
+    row the approval gate held back before the pipeline even ran
+    (statement_parser.split_rows_by_approval's not_approved bucket), and
+    writes them all back - grouped by source tab - via
+    _write_farvision_status_back.
+
+    Skips any transaction with no source_sheet/source_row_number (rows only
+    ever get those from parse_google_sheet_tabs, so this is a no-op for the
+    plain-upload or configured-Google-Sheet flows, which never reach this
+    function at all since they never pass an approval_column).
+    """
+    entries_by_sheet: dict[str, list[tuple[int, str]]] = {}
+
+    for txn in transactions:
+        if not txn.source_sheet or txn.source_row_number is None:
+            continue
+        status = _farvision_status_for(txn)
+        entries_by_sheet.setdefault(txn.source_sheet, []).append((txn.source_row_number, status))
+
+    for row in not_approved_rows:
+        sheet_name = str(row.get("source_sheet", "")).strip()
+        row_number = row.get("_source_row_number")
+        if not sheet_name or row_number is None:
+            continue
+        entries_by_sheet.setdefault(sheet_name, []).append((row_number, FARVISION_STATUS_SKIPPED_APPROVAL))
+
+    if entries_by_sheet:
+        _write_farvision_status_back(spreadsheet_id, entries_by_sheet, run_id)
 
 
 def run_automation_stream(dry_run: bool = True, rows: list[dict] | None = None):

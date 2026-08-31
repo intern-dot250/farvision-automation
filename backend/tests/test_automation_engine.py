@@ -5,6 +5,13 @@ from unittest.mock import patch
 
 from app.services.automation_engine import (
     TransactionRowSet,
+    FARVISION_STATUS_DUPLICATE,
+    FARVISION_STATUS_ERROR,
+    FARVISION_STATUS_EXCLUDED_COLLECTION,
+    FARVISION_STATUS_EXCLUDED_INTERNAL_CREDIT,
+    FARVISION_STATUS_EXPORTED,
+    FARVISION_STATUS_NEEDS_REVIEW,
+    FARVISION_STATUS_SKIPPED_APPROVAL,
     _assign_rows,
     _attach_ambiguous_dropdowns,
     _attach_no_match_dropdowns,
@@ -17,11 +24,13 @@ from app.services.automation_engine import (
     _build_receipt_payment_rows,
     _compute_narration_from_formula,
     _distinct_sheet_names,
+    _farvision_status_for,
     _format_amount,
     _normalize_business_unit,
     _process_rows,
     _write_transactions,
     clear_destination_data,
+    write_farvision_status_back_for_run,
 )
 from app.services.classifier import ClassificationResult
 
@@ -3156,3 +3165,109 @@ def test_run_automation_stream_is_deterministic_for_identical_repeated_input():
         == second_ledger["Parent Account Head"]
         == "SUNDRY CREDITORS - CONTRACTORS"
     )
+
+
+def _minimal_txn(
+    destination: str,
+    source_sheet: str | None = "YES Rera 0377",
+    source_row_number: int | None = 5,
+) -> TransactionRowSet:
+    return TransactionRowSet(
+        sl_no="1",
+        reference="REF1",
+        description="test",
+        debit=1000.0,
+        credit=0.0,
+        business_unit="Casa Romana",
+        txn_date=datetime(2026, 7, 8),
+        classification=ClassificationResult(
+            is_internal=False, head="Vendor", payee_name="Test Vendor",
+            matched_master_row=None, needs_review=False,
+        ),
+        destination=destination,
+        source_sheet=source_sheet,
+        source_row_number=source_row_number,
+    )
+
+
+@pytest.mark.parametrize(
+    "destination,expected_status",
+    [
+        ("receipt_payment", FARVISION_STATUS_EXPORTED),
+        ("deposit_withdrawal", FARVISION_STATUS_EXPORTED),
+        ("duplicate", FARVISION_STATUS_DUPLICATE),
+        ("skipped_internal_credit", FARVISION_STATUS_EXCLUDED_INTERNAL_CREDIT),
+        ("skipped_collection", FARVISION_STATUS_EXCLUDED_COLLECTION),
+        ("review", FARVISION_STATUS_NEEDS_REVIEW),
+        ("error", FARVISION_STATUS_ERROR),
+    ],
+)
+def test_farvision_status_for_maps_every_destination(destination, expected_status):
+    txn = _minimal_txn(destination)
+    assert _farvision_status_for(txn) == expected_status
+
+
+def test_write_farvision_status_back_for_run_writes_exported_and_skipped_rows(monkeypatch):
+    transactions = [
+        _minimal_txn("receipt_payment", source_sheet="Tab A", source_row_number=2),
+        _minimal_txn("duplicate", source_sheet="Tab A", source_row_number=3),
+    ]
+    not_approved_rows = [
+        {"source_sheet": "Tab A", "_source_row_number": 4},
+        {"source_sheet": "Tab B", "_source_row_number": 2},
+    ]
+
+    ensured = []
+    written = []
+    monkeypatch.setattr(
+        "app.services.automation_engine.sheets_client.ensure_column",
+        lambda sheet_id, sheet_name, column: ensured.append((sheet_id, sheet_name, column)),
+    )
+    monkeypatch.setattr(
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags",
+        lambda sheet_id, sheet_name, flags: written.append((sheet_id, sheet_name, flags)),
+    )
+
+    write_farvision_status_back_for_run("spreadsheet-id", transactions, not_approved_rows, "run-1")
+
+    assert ("spreadsheet-id", "Tab A", "Farvision Status") in ensured
+    assert ("spreadsheet-id", "Tab B", "Farvision Status") in ensured
+
+    tab_a_flags = next(flags for sid, name, flags in written if name == "Tab A")
+    tab_a_values = {(f["row_number"], f["value"]) for f in tab_a_flags}
+    assert (2, FARVISION_STATUS_EXPORTED) in tab_a_values
+    assert (3, FARVISION_STATUS_DUPLICATE) in tab_a_values
+    assert (4, FARVISION_STATUS_SKIPPED_APPROVAL) in tab_a_values
+
+    tab_b_flags = next(flags for sid, name, flags in written if name == "Tab B")
+    assert {(f["row_number"], f["value"]) for f in tab_b_flags} == {(2, FARVISION_STATUS_SKIPPED_APPROVAL)}
+
+
+def test_write_farvision_status_back_for_run_skips_rows_with_no_source_row_number(monkeypatch):
+    transactions = [_minimal_txn("receipt_payment", source_sheet=None, source_row_number=None)]
+
+    written = []
+    monkeypatch.setattr("app.services.automation_engine.sheets_client.ensure_column", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags",
+        lambda *a, **k: written.append(a),
+    )
+
+    write_farvision_status_back_for_run("spreadsheet-id", transactions, [], "run-1")
+
+    assert written == []
+
+
+def test_write_farvision_status_back_for_run_never_raises_when_write_fails(monkeypatch):
+    transactions = [_minimal_txn("receipt_payment")]
+
+    monkeypatch.setattr("app.services.automation_engine.sheets_client.ensure_column", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    monkeypatch.setattr("app.services.automation_engine.ledger_repository.log_audit", lambda *a, **k: None)
+
+    # Must not raise - same non-blocking, logged-only contract as every
+    # other post-write cosmetic step in this file.
+    write_farvision_status_back_for_run("spreadsheet-id", transactions, [], "run-1")

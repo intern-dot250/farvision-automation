@@ -37,6 +37,7 @@ def test_google_sheet_tabs_returns_included_and_ignored():
         "sheets": ["YES Rera 0377"],
         "total_sheets": 2,
         "ignored_sheets": ["Index"],
+        "approval_columns": [],
     }
 
 
@@ -164,6 +165,78 @@ def test_run_google_sheet_stream_reports_inaccessible_sheet():
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Unable to access this Google Sheet. Please check the sheet permissions."
+
+
+def test_run_google_sheet_stream_filters_by_approval_column_and_writes_status_back():
+    fake_rows = [{"REFERENCE": "REF1", "APPROVAL 1": "yes", "source_sheet": "Tab A", "_source_row_number": 2}]
+    approved = fake_rows
+    not_approved = [{"REFERENCE": "REF2", "source_sheet": "Tab A", "_source_row_number": 3}]
+
+    with patch(
+        "app.api.v1.automation.automation_engine.run_automation_stream", side_effect=_fake_stream
+    ), patch(
+        "app.api.v1.automation.statement_parser.parse_google_sheet_tabs", return_value=fake_rows
+    ), patch(
+        "app.api.v1.automation.statement_parser.split_rows_by_approval",
+        return_value=(approved, not_approved),
+    ) as mock_split, patch(
+        "app.api.v1.automation.automation_engine.write_farvision_status_back_for_run"
+    ) as mock_write_back:
+        response = client.post(
+            "/api/v1/automation/run-google-sheet-stream?dry_run=false",
+            json={"spreadsheet_id": "sheet-id", "sheet_names": ["Tab A"], "approval_column": "APPROVAL 1"},
+        )
+
+    assert response.status_code == 200
+    mock_split.assert_called_once_with(fake_rows, "APPROVAL 1")
+    mock_write_back.assert_called_once()
+    call_args = mock_write_back.call_args.args
+    assert call_args[0] == "sheet-id"
+    assert call_args[2] == not_approved
+
+
+def test_run_google_sheet_stream_dry_run_does_not_write_status_back():
+    fake_rows = [{"REFERENCE": "REF1", "APPROVAL 1": "yes", "source_sheet": "Tab A", "_source_row_number": 2}]
+
+    with patch(
+        "app.api.v1.automation.automation_engine.run_automation_stream", side_effect=_fake_stream
+    ), patch(
+        "app.api.v1.automation.statement_parser.parse_google_sheet_tabs", return_value=fake_rows
+    ), patch(
+        "app.api.v1.automation.statement_parser.split_rows_by_approval",
+        return_value=(fake_rows, []),
+    ), patch(
+        "app.api.v1.automation.automation_engine.write_farvision_status_back_for_run"
+    ) as mock_write_back:
+        response = client.post(
+            "/api/v1/automation/run-google-sheet-stream?dry_run=true",
+            json={"spreadsheet_id": "sheet-id", "sheet_names": ["Tab A"], "approval_column": "APPROVAL 1"},
+        )
+
+    assert response.status_code == 200
+    mock_write_back.assert_not_called()
+
+
+def test_run_google_sheet_stream_no_approval_column_skips_gating_entirely():
+    fake_rows = [{"REFERENCE": "REF1", "source_sheet": "Tab A"}]
+
+    with patch(
+        "app.api.v1.automation.automation_engine.run_automation_stream", side_effect=_fake_stream
+    ), patch(
+        "app.api.v1.automation.statement_parser.parse_google_sheet_tabs", return_value=fake_rows
+    ), patch(
+        "app.api.v1.automation.statement_parser.split_rows_by_approval"
+    ) as mock_split, patch(
+        "app.api.v1.automation.automation_engine.write_farvision_status_back_for_run"
+    ) as mock_write_back:
+        response = client.post(
+            "/api/v1/automation/run-google-sheet-stream?dry_run=false",
+            json={"spreadsheet_id": "sheet-id", "sheet_names": ["Tab A"]},
+        )
+
+    assert response.status_code == 200
+    mock_split.assert_not_called()
+    mock_write_back.assert_not_called()
 
 
 def test_run_google_sheet_stream_surfaces_missing_header_as_400():

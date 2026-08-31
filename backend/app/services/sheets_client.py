@@ -272,6 +272,23 @@ def _ensure_header(worksheet: gspread.Worksheet, sheet_id: str, worksheet_name: 
     return header
 
 
+def ensure_column(sheet_id: str, worksheet_name: str, column_name: str) -> None:
+    """Appends `column_name` as a new header cell (in the next empty column
+    of row 1) if it isn't already present on this worksheet - self-healing,
+    no manual one-time sheet setup needed, same convention as
+    get_or_create_worksheet. No-op if the column already exists. Used to
+    add the machine-owned "Farvision Status" column to a source Google Sheet
+    tab the app doesn't otherwise write to.
+    """
+    worksheet = get_worksheet(sheet_id, worksheet_name)
+    header = _get_header(sheet_id, worksheet_name, worksheet)
+    if column_name in header:
+        return
+    letter = _column_letter(len(header) + 1)
+    worksheet.update(range_name=f"{letter}1", values=[[column_name]])
+    _header_cache[(sheet_id, worksheet_name)] = header + [column_name]
+
+
 def read_all_records(sheet_id: str, worksheet_name: str) -> list[dict]:
     """Read a worksheet as a list of dicts, keyed by its header row."""
     worksheet = get_worksheet(sheet_id, worksheet_name)
@@ -559,13 +576,16 @@ def batch_apply_cell_flags(sheet_id: str, worksheet_name: str, flags: list[dict]
 
     Each entry in `flags`: {"row_number": int, "column": str,
     "dropdown_values": list[str] | None, "dropdown_range": str | None,
-    "note_text": str | None, "formula": str | None} - any of note_text/
-    formula can be combined with one of dropdown_values/dropdown_range for
-    the same cell (e.g. a dropdown + a note together); dropdown_values and
-    dropdown_range are mutually exclusive per entry (an inline ONE_OF_LIST
-    dropdown vs. a "List from a range" ONE_OF_RANGE dropdown - the latter
-    for option lists too large for ONE_OF_LIST's ~500-value cap, sourced
-    from a same-spreadsheet helper tab via sync_lookup_column()).
+    "note_text": str | None, "formula": str | None, "value": str | None} -
+    any of note_text/formula/value can be combined with one of
+    dropdown_values/dropdown_range for the same cell (e.g. a dropdown + a
+    note together); dropdown_values and dropdown_range are mutually
+    exclusive per entry (an inline ONE_OF_LIST dropdown vs. a "List from a
+    range" ONE_OF_RANGE dropdown - the latter for option lists too large for
+    ONE_OF_LIST's ~500-value cap, sourced from a same-spreadsheet helper tab
+    via sync_lookup_column()). `value` writes a plain literal string into the
+    cell (e.g. a computed status label) - unlike `formula`, it's never
+    evaluated as a formula even if it starts with "=".
     No-op (per entry) if `column` isn't a real header on this worksheet.
     A malformed request anywhere in the batch fails the whole call
     (Sheets API batchUpdate is all-or-nothing) - callers should treat
@@ -639,6 +659,16 @@ def batch_apply_cell_flags(sheet_id: str, worksheet_name: str, flags: list[dict]
                     "range": cell_range,
                     "fields": "userEnteredValue",
                     "rows": [{"values": [{"userEnteredValue": {"formulaValue": formula}}]}],
+                }
+            })
+
+        value = flag.get("value")
+        if value is not None:
+            requests.append({
+                "updateCells": {
+                    "range": cell_range,
+                    "fields": "userEnteredValue",
+                    "rows": [{"values": [{"userEnteredValue": {"stringValue": str(value)}}]}],
                 }
             })
 

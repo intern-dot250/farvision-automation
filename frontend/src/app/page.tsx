@@ -38,6 +38,15 @@ export default function DashboardPage() {
   const [spreadsheetId, setSpreadsheetId] = useState<string | null>(null);
   const [sheetUrlError, setSheetUrlError] = useState<string | null>(null);
 
+  // Approval-stage gating for a Google Sheet linked from the Bank Statement
+  // Processor project (a separate app) - its output tabs carry human-filled
+  // "APPROVAL 1"/"APPROVAL 2"/... columns, discovered dynamically per sheet
+  // (never hardcoded to a fixed count). "" means nothing picked yet - no
+  // silent default gating choice is ever made.
+  const NO_APPROVAL_CHECK_OPTION = "__no_approval_check__";
+  const [approvalColumns, setApprovalColumns] = useState<string[]>([]);
+  const [selectedApprovalOption, setSelectedApprovalOption] = useState("");
+
   const [showClearPanel, setShowClearPanel] = useState(false);
   const [clearTarget, setClearTarget] = useState<ClearSheetTarget>("receipt_payment");
   const [clearConfirmText, setClearConfirmText] = useState("");
@@ -85,6 +94,8 @@ export default function DashboardPage() {
     setTotalSheets(0);
     setIgnoredSheets([]);
     setShowIgnored(false);
+    setApprovalColumns([]);
+    setSelectedApprovalOption("");
   };
 
   const handleSourceModeChange = (mode: "file" | "google_sheet") => {
@@ -138,6 +149,7 @@ export default function DashboardPage() {
         setTotalSheets(data.total_sheets);
         setIgnoredSheets(data.ignored_sheets);
         setSelectedSheetNames(data.sheets.slice(0, 1));
+        setApprovalColumns(data.approval_columns ?? []);
       })
       .catch((err) => {
         setSheetUrlError(err instanceof Error ? err.message : "Please enter a valid Google Sheets URL.");
@@ -150,6 +162,7 @@ export default function DashboardPage() {
       if (!file) return;
     } else {
       if (!spreadsheetId || selectedSheetNames.length === 0) return;
+      if (approvalColumns.length > 0 && !selectedApprovalOption) return;
     }
 
     setRunning(true);
@@ -172,6 +185,9 @@ export default function DashboardPage() {
               selectedSheetNames,
               dryRun,
               setProgress,
+              approvalColumns.length > 0 && selectedApprovalOption !== NO_APPROVAL_CHECK_OPTION
+                ? selectedApprovalOption
+                : null,
             );
       setResult(response);
       loadStats();
@@ -211,6 +227,16 @@ export default function DashboardPage() {
         <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
           Upload today&apos;s bank statement to classify and route transactions.
         </p>
+        {process.env.NEXT_PUBLIC_BANK_STATEMENT_PROCESSOR_URL && (
+          <a
+            href={process.env.NEXT_PUBLIC_BANK_STATEMENT_PROCESSOR_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-1 inline-block text-sm text-blue-600 hover:underline dark:text-blue-400"
+          >
+            Open Bank Statement Processor ↗
+          </a>
+        )}
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -416,13 +442,53 @@ export default function DashboardPage() {
             </div>
           )}
 
+          {!sheetOptionsLoading && sourceMode === "google_sheet" && approvalColumns.length > 0 && (
+            <label className="flex flex-col gap-2">
+              <span className="text-sm text-zinc-600 dark:text-zinc-400">
+                Select Approval Stage
+              </span>
+              <select
+                value={selectedApprovalOption}
+                onChange={(e) => setSelectedApprovalOption(e.target.value)}
+                disabled={running}
+                className="w-fit rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+              >
+                <option value="" disabled>
+                  Choose an approval stage…
+                </option>
+                {approvalColumns.map((column) => (
+                  <option key={column} value={column}>
+                    {column}
+                  </option>
+                ))}
+                <option value={NO_APPROVAL_CHECK_OPTION}>
+                  No Approval Check (approval ignored, other rules still apply)
+                </option>
+              </select>
+              {!selectedApprovalOption && (
+                <p className="text-sm text-red-600 dark:text-red-400">
+                  Please select an approval stage before running.
+                </p>
+              )}
+              {selectedApprovalOption === NO_APPROVAL_CHECK_OPTION && (
+                <p className="text-sm text-amber-600 dark:text-amber-400">
+                  Approval check disabled — all selected rows will be processed regardless of approval status.
+                </p>
+              )}
+            </label>
+          )}
+
           <div className="flex flex-wrap gap-2">
             <button
               onClick={() => handleRun(true)}
               disabled={
                 running ||
                 sheetOptionsLoading ||
-                (sourceMode === "file" ? !file : !spreadsheetId || selectedSheetNames.length === 0)
+                (sourceMode === "file"
+                  ? !file
+                  : !spreadsheetId ||
+                    selectedSheetNames.length === 0 ||
+                    (approvalColumns.length > 0 && !selectedApprovalOption))
               }
               className="w-fit rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
             >
@@ -433,7 +499,11 @@ export default function DashboardPage() {
               disabled={
                 running ||
                 sheetOptionsLoading ||
-                (sourceMode === "file" ? !file : !spreadsheetId || selectedSheetNames.length === 0)
+                (sourceMode === "file"
+                  ? !file
+                  : !spreadsheetId ||
+                    selectedSheetNames.length === 0 ||
+                    (approvalColumns.length > 0 && !selectedApprovalOption))
               }
               className="w-fit rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700 disabled:opacity-50 dark:bg-emerald-500 dark:hover:bg-emerald-600"
             >

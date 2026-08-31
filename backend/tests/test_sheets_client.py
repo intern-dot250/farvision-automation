@@ -414,6 +414,44 @@ def test_batch_apply_cell_flags_dropdown_range_issues_one_of_range_request(monke
     assert condition["values"] == [{"userEnteredValue": "Lookup!A2:A7845"}]
 
 
+def test_batch_apply_cell_flags_value_writes_a_literal_string(monkeypatch):
+    mock_ws = MagicMock()
+    mock_ws.id = 123
+    mock_ws.row_values.return_value = ["Link Ref Code", "Farvision Status"]
+    mock_spreadsheet = MagicMock()
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+    monkeypatch.setattr(sheets_client, "open_sheet", lambda sid: mock_spreadsheet)
+
+    sheets_client.batch_apply_cell_flags(
+        "sheet1", "Tab A",
+        [{"row_number": 5, "column": "Farvision Status", "value": "Exported"}],
+    )
+
+    requests = mock_spreadsheet.batch_update.call_args.args[0]["requests"]
+    assert len(requests) == 1
+    assert requests[0]["updateCells"]["rows"][0]["values"][0]["userEnteredValue"] == {"stringValue": "Exported"}
+
+
+def test_ensure_column_appends_missing_header(monkeypatch):
+    mock_ws = MagicMock()
+    mock_ws.row_values.return_value = ["TXN DATE", "DESCRIPTION"]
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    sheets_client.ensure_column("sheet1", "Tab A", "Farvision Status")
+
+    mock_ws.update.assert_called_once_with(range_name="C1", values=[["Farvision Status"]])
+
+
+def test_ensure_column_is_a_no_op_when_column_already_exists(monkeypatch):
+    mock_ws = MagicMock()
+    mock_ws.row_values.return_value = ["TXN DATE", "Farvision Status"]
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    sheets_client.ensure_column("sheet1", "Tab A", "Farvision Status")
+
+    mock_ws.update.assert_not_called()
+
+
 def test_batch_apply_cell_flags_dropdown_values_takes_precedence_over_dropdown_range(monkeypatch):
     # A flag should never combine both - dropdown_values wins if somehow both
     # are present, so a caller bug never silently produces two competing

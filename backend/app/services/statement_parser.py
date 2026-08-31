@@ -1,5 +1,6 @@
 import io
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 
 import pandas as pd
 
@@ -7,11 +8,27 @@ from app.services import sheets_client
 
 REQUIRED_COLUMNS = ["TXN DATE", "DESCRIPTION", "REFERENCE", "DEBITS", "CREDITS"]
 
+# Machine-owned status column this app writes back onto a source Google
+# Sheet tab (approval-linked runs only) - see automation_engine.py's
+# Farvision Status write-back step. Unlike APPROVAL 1/2/3 (human-owned,
+# never written by this codebase), this column is safe to overwrite on
+# every run.
+FARVISION_STATUS_COLUMN = "Farvision Status"
+FARVISION_STATUS_EXPORTED = "Exported"
+
+# The Bank Statement Processor project (a separate codebase) appends one of
+# these free-text, human-filled columns per approval stage to its per-account
+# output tabs (e.g. "APPROVAL 1", "APPROVAL 2", "APPROVAL 3") - never written
+# to by this codebase, only read. Matched dynamically (never hardcoded to a
+# fixed count of stages) so any number of approval stages is discovered.
+_APPROVAL_COLUMN_RE = re.compile(r"^APPROVAL \d+$", re.IGNORECASE)
+
 
 @dataclass
 class SheetCandidates:
     included: list[str]
     ignored: list[str]
+    approval_columns: list[str] = field(default_factory=list)
 
 # Real statement exports sometimes carry a summary row (e.g. "LAST UPDATE ...")
 # above the real header, so the header isn't always row 0.
@@ -86,15 +103,20 @@ def list_candidate_sheets_from_google(sheet_id: str) -> SheetCandidates:
     """
     titles = sheets_client.list_worksheet_titles(sheet_id)
     included = []
+    approval_columns: set[str] = set()
     for title in titles:
         values = sheets_client.get_worksheet_values(sheet_id, title, row_limit=MAX_HEADER_SCAN_ROWS)
         if not values:
             continue
         raw = pd.DataFrame(values)
-        if _find_header_row(raw) is not None:
-            included.append(title)
+        header_row = _find_header_row(raw)
+        if header_row is None:
+            continue
+        included.append(title)
+        headers = [str(v).strip() for v in raw.iloc[header_row].tolist()]
+        approval_columns.update(h for h in headers if _APPROVAL_COLUMN_RE.match(h))
     ignored = [title for title in titles if title not in included]
-    return SheetCandidates(included=included, ignored=ignored)
+    return SheetCandidates(included=included, ignored=ignored, approval_columns=sorted(approval_columns))
 
 
 def parse_google_sheet_tabs(sheet_id: str, sheet_names: list[str]) -> list[dict]:
@@ -114,11 +136,44 @@ def parse_google_sheet_tabs(sheet_id: str, sheet_names: list[str]) -> list[dict]
             raise ValueError(f"Sheet '{name}' is missing required columns: {', '.join(REQUIRED_COLUMNS)}")
         sheet_df = _apply_header(raw, header_row)
         sheet_df["source_sheet"] = name
+        # 1-indexed sheet row number each row actually lives on - `.iloc`
+        # preserves `raw`'s original row positions as the index, so this
+        # survives the header slice untouched. Needed later to write
+        # Farvision Status back to the exact right cell (see
+        # automation_engine.py's write-back step) - only meaningful for
+        # this Google Sheet input path, unlike source_sheet which is also
+        # used by uploads.
+        sheet_df["_source_row_number"] = sheet_df.index + 1
         frames.append(sheet_df)
 
     df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     df = df.fillna("")
     return _drop_non_transaction_rows(df.to_dict(orient="records"))
+
+
+def split_rows_by_approval(rows: list[dict], approval_column: str) -> tuple[list[dict], list[dict]]:
+    """Splits Google-Sheet-sourced rows (tagged with source_sheet/
+    _source_row_number by parse_google_sheet_tabs above) into (approved,
+    not_approved), based on whether `approval_column` is non-blank for that
+    row - "approved" means any non-blank value, confirmed with the user (the
+    accounts team writes whatever they use for a completed approval, this
+    codebase never dictates or reads a specific value).
+
+    A row whose Farvision Status is already "Exported" from a prior run is
+    excluded from both buckets - it's already been handled, so re-running
+    the same sheet after new rows are appended doesn't re-export or
+    re-touch it.
+    """
+    approved: list[dict] = []
+    not_approved: list[dict] = []
+    for row in rows:
+        if str(row.get(FARVISION_STATUS_COLUMN, "")).strip() == FARVISION_STATUS_EXPORTED:
+            continue
+        if str(row.get(approval_column, "")).strip():
+            approved.append(row)
+        else:
+            not_approved.append(row)
+    return approved, not_approved
 
 
 def list_candidate_sheets(filename: str, content: bytes) -> SheetCandidates:

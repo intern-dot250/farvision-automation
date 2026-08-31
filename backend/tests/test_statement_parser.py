@@ -5,10 +5,12 @@ import pandas as pd
 import pytest
 
 from app.services.statement_parser import (
+    FARVISION_STATUS_COLUMN,
     list_candidate_sheets,
     list_candidate_sheets_from_google,
     parse_google_sheet_tabs,
     parse_statement_file,
+    split_rows_by_approval,
 )
 
 
@@ -519,3 +521,83 @@ def test_parse_google_sheet_tabs_missing_header_raises_value_error():
     ):
         with pytest.raises(ValueError, match="missing required columns"):
             parse_google_sheet_tabs("sheet-id", ["Index"])
+
+
+def test_list_candidate_sheets_from_google_discovers_approval_columns():
+    header_with_approvals = _TXN_HEADER_ROW + ["APPROVAL 1", "APPROVAL 2", "APPROVAL 3"]
+    values_by_tab = {
+        "YES Rera 0377": [header_with_approvals, ["1", "22-Jul-2026", "test", "REF1", "1000", "", "", "", ""]],
+        "Index": [["unrelated"], ["no transaction columns"]],
+    }
+
+    with patch(
+        "app.services.statement_parser.sheets_client.list_worksheet_titles",
+        return_value=["YES Rera 0377", "Index"],
+    ), patch(
+        "app.services.statement_parser.sheets_client.get_worksheet_values",
+        side_effect=lambda sheet_id, name, row_limit=None: values_by_tab[name],
+    ):
+        result = list_candidate_sheets_from_google("sheet-id")
+
+    assert result.approval_columns == ["APPROVAL 1", "APPROVAL 2", "APPROVAL 3"]
+
+
+def test_list_candidate_sheets_from_google_no_approval_columns_is_empty_list():
+    values_by_tab = {
+        "YES Rera 0377": [_TXN_HEADER_ROW, ["1", "22-Jul-2026", "test", "REF1", "1000", ""]],
+    }
+
+    with patch(
+        "app.services.statement_parser.sheets_client.list_worksheet_titles",
+        return_value=["YES Rera 0377"],
+    ), patch(
+        "app.services.statement_parser.sheets_client.get_worksheet_values",
+        side_effect=lambda sheet_id, name, row_limit=None: values_by_tab[name],
+    ):
+        result = list_candidate_sheets_from_google("sheet-id")
+
+    assert result.approval_columns == []
+
+
+def test_parse_google_sheet_tabs_tags_source_row_number():
+    values = [
+        _TXN_HEADER_ROW,
+        ["1", "22-Jul-2026", "test", "REF1", "1000", ""],
+        ["2", "22-Jul-2026", "test2", "REF2", "500", ""],
+    ]
+
+    with patch(
+        "app.services.statement_parser.sheets_client.get_worksheet_values",
+        return_value=values,
+    ):
+        rows = parse_google_sheet_tabs("sheet-id", ["YES Rera 0377"])
+
+    # Header is sheet row 1, so the first data row is sheet row 2, etc.
+    assert rows[0]["_source_row_number"] == 2
+    assert rows[1]["_source_row_number"] == 3
+
+
+def test_split_rows_by_approval_separates_blank_and_filled():
+    rows = [
+        {"REFERENCE": "REF1", "APPROVAL 1": "Approved by AB"},
+        {"REFERENCE": "REF2", "APPROVAL 1": ""},
+        {"REFERENCE": "REF3", "APPROVAL 1": "   "},
+    ]
+
+    approved, not_approved = split_rows_by_approval(rows, "APPROVAL 1")
+
+    assert [r["REFERENCE"] for r in approved] == ["REF1"]
+    assert [r["REFERENCE"] for r in not_approved] == ["REF2", "REF3"]
+
+
+def test_split_rows_by_approval_excludes_already_exported_rows():
+    rows = [
+        {"REFERENCE": "REF1", "APPROVAL 1": "yes", FARVISION_STATUS_COLUMN: "Exported"},
+        {"REFERENCE": "REF2", "APPROVAL 1": "yes"},
+        {"REFERENCE": "REF3", "APPROVAL 1": "", FARVISION_STATUS_COLUMN: "Exported"},
+    ]
+
+    approved, not_approved = split_rows_by_approval(rows, "APPROVAL 1")
+
+    assert [r["REFERENCE"] for r in approved] == ["REF2"]
+    assert not_approved == []
