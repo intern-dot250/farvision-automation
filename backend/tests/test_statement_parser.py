@@ -542,6 +542,27 @@ def test_list_candidate_sheets_from_google_discovers_approval_columns():
     assert result.approval_columns == ["APPROVAL 1", "APPROVAL 2", "APPROVAL 3"]
 
 
+def test_list_candidate_sheets_from_google_discovers_auth_code_approval_columns():
+    # The real Bank Statement Processor tabs (confirmed live) use "Auth MB" /
+    # "Auth MK" / "Auth NM" - a different naming convention than "APPROVAL n"
+    # - both must be discovered by the same dynamic scan.
+    header_with_auth_columns = _TXN_HEADER_ROW + ["Auth MB", "Auth MK", "Auth NM"]
+    values_by_tab = {
+        "YES Master 0264": [header_with_auth_columns, ["1", "22-Jul-2026", "test", "REF1", "1000", "", "", "", ""]],
+    }
+
+    with patch(
+        "app.services.statement_parser.sheets_client.list_worksheet_titles",
+        return_value=["YES Master 0264"],
+    ), patch(
+        "app.services.statement_parser.sheets_client.get_worksheet_values",
+        side_effect=lambda sheet_id, name, row_limit=None: values_by_tab[name],
+    ):
+        result = list_candidate_sheets_from_google("sheet-id")
+
+    assert result.approval_columns == ["Auth MB", "Auth MK", "Auth NM"]
+
+
 def test_list_candidate_sheets_from_google_no_approval_columns_is_empty_list():
     values_by_tab = {
         "YES Rera 0377": [_TXN_HEADER_ROW, ["1", "22-Jul-2026", "test", "REF1", "1000", ""]],

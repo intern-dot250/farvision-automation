@@ -16,12 +16,17 @@ REQUIRED_COLUMNS = ["TXN DATE", "DESCRIPTION", "REFERENCE", "DEBITS", "CREDITS"]
 FARVISION_STATUS_COLUMN = "Farvision Status"
 FARVISION_STATUS_EXPORTED = "Exported"
 
-# The Bank Statement Processor project (a separate codebase) appends one of
-# these free-text, human-filled columns per approval stage to its per-account
-# output tabs (e.g. "APPROVAL 1", "APPROVAL 2", "APPROVAL 3") - never written
-# to by this codebase, only read. Matched dynamically (never hardcoded to a
-# fixed count of stages) so any number of approval stages is discovered.
-_APPROVAL_COLUMN_RE = re.compile(r"^APPROVAL \d+$", re.IGNORECASE)
+# The Bank Statement Processor project (a separate codebase) appends one
+# free-text, human-filled column per approval stage to its per-account
+# output tabs - never written to by this codebase, only read. Confirmed live
+# against a real per-account tab (e.g. "YES Master 0264"): the actual naming
+# in production is "Auth MB" / "Auth MK" / "Auth NM" (a short bank/person
+# code after "Auth"), not the "APPROVAL 1/2/3" shape suggested by an earlier
+# source-code-only read of that project - both shapes are matched here so
+# neither naming convention is missed. Matched dynamically (never hardcoded
+# to a fixed count or to the specific codes MB/MK/NM) so any number of
+# approval stages, under either naming convention, is discovered.
+_APPROVAL_COLUMN_RE = re.compile(r"^(APPROVAL \d+|AUTH [A-Z]{2,4})$", re.IGNORECASE)
 
 
 @dataclass
