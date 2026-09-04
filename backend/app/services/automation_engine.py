@@ -1518,18 +1518,51 @@ def _farvision_status_for(txn: TransactionRowSet) -> str:
     return _DESTINATION_TO_FARVISION_STATUS.get(txn.destination, FARVISION_STATUS_NEEDS_REVIEW)
 
 
-def _write_farvision_status_back(
-    spreadsheet_id: str, entries_by_sheet: dict[str, list[tuple[int, str]]], run_id: str,
+# Export Status values written back onto the same source Google Sheet tab,
+# alongside Farvision Status - a coarser, four-value taxonomy the accounts
+# team asked for verbatim ("exported"/"not auth"/"skipped"/"error", exactly
+# as written, never title-cased). Every Farvision Status outcome maps to
+# exactly one of these; the mapping is deliberately many-to-one (e.g.
+# Duplicate/Excluded/Needs Review are all "skipped": none of them were
+# exported, none are an authorization issue, and none are an exception).
+EXPORT_STATUS_EXPORTED = "exported"
+EXPORT_STATUS_NOT_AUTH = "not auth"
+EXPORT_STATUS_SKIPPED = "skipped"
+EXPORT_STATUS_ERROR = "error"
+
+_DESTINATION_TO_EXPORT_STATUS = {
+    "receipt_payment": EXPORT_STATUS_EXPORTED,
+    "deposit_withdrawal": EXPORT_STATUS_EXPORTED,
+    "duplicate": EXPORT_STATUS_SKIPPED,
+    "skipped_internal_credit": EXPORT_STATUS_SKIPPED,
+    "skipped_collection": EXPORT_STATUS_SKIPPED,
+    "review": EXPORT_STATUS_SKIPPED,
+    "error": EXPORT_STATUS_ERROR,
+}
+
+
+def _export_status_for(txn: TransactionRowSet) -> str:
+    """Maps an already-computed transaction outcome to the Export Status
+    taxonomy - see _DESTINATION_TO_EXPORT_STATUS. Same defensive-backstop
+    caveat as _farvision_status_for: destination should always be a known
+    key by the time a transaction reaches here."""
+    return _DESTINATION_TO_EXPORT_STATUS.get(txn.destination, EXPORT_STATUS_SKIPPED)
+
+
+def _write_status_columns_back(
+    spreadsheet_id: str, entries_by_sheet: dict[str, list[tuple[int, str, str]]], run_id: str,
 ) -> None:
-    """Writes the computed Farvision Status back onto the source Google
-    Sheet tab(s) rows were read from - a new, machine-owned column (created
-    via sheets_client.ensure_column if missing on that tab), safe to
-    overwrite on every run (unlike APPROVAL 1/2/3, which stay human-owned
-    and are never written to by this codebase). Reuses
-    sheets_client.batch_apply_cell_flags' existing "flags" write path (the
-    same one _attach_ambiguous_dropdowns/_attach_no_match_dropdowns already
-    use) for a "value" flag, so one row's worth of statuses become one
-    batched Sheets API write per tab, not one call per row.
+    """Writes the computed Farvision Status and Export Status back onto the
+    source Google Sheet tab(s) rows were read from - both new, machine-owned
+    columns (created via sheets_client.ensure_column if missing on that
+    tab), safe to overwrite on every run (unlike APPROVAL 1/2/3, which stay
+    human-owned and are never written to by this codebase). Each entry is
+    (row_number, column_name, value); a row contributes one entry per status
+    column. Reuses sheets_client.batch_apply_cell_flags' existing "flags"
+    write path (the same one _attach_ambiguous_dropdowns/
+    _attach_no_match_dropdowns already use) for a "value" flag, so an entire
+    tab's worth of statuses - both columns, every row - become one batched
+    Sheets API write per tab, not one call per row or per column.
 
     Same non-blocking, retry-twice, logged-but-never-failing contract as
     every other post-write cosmetic step in this file - this always runs
@@ -1542,19 +1575,21 @@ def _write_farvision_status_back(
     for sheet_name, entries in entries_by_sheet.items():
         if not entries:
             continue
+        columns_used = {column for _, column, _ in entries}
         try:
-            sheets_client.ensure_column(spreadsheet_id, sheet_name, statement_parser.FARVISION_STATUS_COLUMN)
+            for column in columns_used:
+                sheets_client.ensure_column(spreadsheet_id, sheet_name, column)
         except Exception as exc:
-            logger.error(f"[{run_id}] Failed to ensure Farvision Status column on '{sheet_name}': {exc}")
+            logger.error(f"[{run_id}] Failed to ensure status column(s) on '{sheet_name}': {exc}")
             ledger_repository.log_audit(
-                run_id, "error", "Failed to ensure Farvision Status column",
-                {"sheet": sheet_name, "error": str(exc)},
+                run_id, "error", "Failed to ensure status column(s)",
+                {"sheet": sheet_name, "columns": sorted(columns_used), "error": str(exc)},
             )
             continue
 
         flags = [
-            {"row_number": row_number, "column": statement_parser.FARVISION_STATUS_COLUMN, "value": status}
-            for row_number, status in entries
+            {"row_number": row_number, "column": column, "value": value}
+            for row_number, column, value in entries
         ]
         for attempt in (1, 2):
             try:
@@ -1564,12 +1599,12 @@ def _write_farvision_status_back(
                 if attempt < 2:
                     continue
                 logger.error(
-                    f"[{run_id}] Failed to write Farvision Status back to '{sheet_name}' for "
-                    f"{len(flags)} row(s): {exc}"
+                    f"[{run_id}] Failed to write status column(s) back to '{sheet_name}' for "
+                    f"{len(flags)} cell(s): {exc}"
                 )
                 ledger_repository.log_audit(
-                    run_id, "error", "Failed to write Farvision Status back",
-                    {"sheet": sheet_name, "row_count": len(flags), "error": str(exc)},
+                    run_id, "error", "Failed to write status column(s) back",
+                    {"sheet": sheet_name, "cell_count": len(flags), "error": str(exc)},
                 )
 
 
@@ -1580,36 +1615,42 @@ def write_farvision_status_back_for_run(
     run_id: str,
 ) -> None:
     """Called by the /run-google-sheet-stream route (only for a real, non-
-    dry-run write, and only when an approval_column was selected) after a
-    run completes. Computes each processed transaction's Farvision Status
-    (_farvision_status_for) plus FARVISION_STATUS_SKIPPED_APPROVAL for every
-    row the approval gate held back before the pipeline even ran
+    dry-run write, and only when approval_columns was selected) after a run
+    completes. Computes each processed transaction's Farvision Status
+    (_farvision_status_for) and Export Status (_export_status_for), plus
+    FARVISION_STATUS_SKIPPED_APPROVAL / EXPORT_STATUS_NOT_AUTH for every row
+    the approval gate held back before the pipeline even ran
     (statement_parser.split_rows_by_approval's not_approved bucket), and
     writes them all back - grouped by source tab - via
-    _write_farvision_status_back.
+    _write_status_columns_back.
 
     Skips any transaction with no source_sheet/source_row_number (rows only
     ever get those from parse_google_sheet_tabs, so this is a no-op for the
     plain-upload or configured-Google-Sheet flows, which never reach this
-    function at all since they never pass an approval_column).
+    function at all since they never pass approval_columns).
     """
-    entries_by_sheet: dict[str, list[tuple[int, str]]] = {}
+    entries_by_sheet: dict[str, list[tuple[int, str, str]]] = {}
 
     for txn in transactions:
         if not txn.source_sheet or txn.source_row_number is None:
             continue
-        status = _farvision_status_for(txn)
-        entries_by_sheet.setdefault(txn.source_sheet, []).append((txn.source_row_number, status))
+        entries_by_sheet.setdefault(txn.source_sheet, []).extend([
+            (txn.source_row_number, statement_parser.FARVISION_STATUS_COLUMN, _farvision_status_for(txn)),
+            (txn.source_row_number, statement_parser.EXPORT_STATUS_COLUMN, _export_status_for(txn)),
+        ])
 
     for row in not_approved_rows:
         sheet_name = str(row.get("source_sheet", "")).strip()
         row_number = row.get("_source_row_number")
         if not sheet_name or row_number is None:
             continue
-        entries_by_sheet.setdefault(sheet_name, []).append((row_number, FARVISION_STATUS_SKIPPED_APPROVAL))
+        entries_by_sheet.setdefault(sheet_name, []).extend([
+            (row_number, statement_parser.FARVISION_STATUS_COLUMN, FARVISION_STATUS_SKIPPED_APPROVAL),
+            (row_number, statement_parser.EXPORT_STATUS_COLUMN, EXPORT_STATUS_NOT_AUTH),
+        ])
 
     if entries_by_sheet:
-        _write_farvision_status_back(spreadsheet_id, entries_by_sheet, run_id)
+        _write_status_columns_back(spreadsheet_id, entries_by_sheet, run_id)
 
 
 def run_automation_stream(dry_run: bool = True, rows: list[dict] | None = None):

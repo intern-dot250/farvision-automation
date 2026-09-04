@@ -15,6 +15,7 @@ REQUIRED_COLUMNS = ["TXN DATE", "DESCRIPTION", "REFERENCE", "DEBITS", "CREDITS"]
 # every run.
 FARVISION_STATUS_COLUMN = "Farvision Status"
 FARVISION_STATUS_EXPORTED = "Exported"
+EXPORT_STATUS_COLUMN = "Export Status"
 
 # The Bank Statement Processor project (a separate codebase) appends one
 # free-text, human-filled column per approval stage to its per-account

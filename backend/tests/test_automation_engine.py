@@ -5,6 +5,10 @@ from unittest.mock import patch
 
 from app.services.automation_engine import (
     TransactionRowSet,
+    EXPORT_STATUS_ERROR,
+    EXPORT_STATUS_EXPORTED,
+    EXPORT_STATUS_NOT_AUTH,
+    EXPORT_STATUS_SKIPPED,
     FARVISION_STATUS_DUPLICATE,
     FARVISION_STATUS_ERROR,
     FARVISION_STATUS_EXCLUDED_COLLECTION,
@@ -24,6 +28,7 @@ from app.services.automation_engine import (
     _build_receipt_payment_rows,
     _compute_narration_from_formula,
     _distinct_sheet_names,
+    _export_status_for,
     _farvision_status_for,
     _format_amount,
     _normalize_business_unit,
@@ -3207,6 +3212,23 @@ def test_farvision_status_for_maps_every_destination(destination, expected_statu
     assert _farvision_status_for(txn) == expected_status
 
 
+@pytest.mark.parametrize(
+    "destination,expected_status",
+    [
+        ("receipt_payment", EXPORT_STATUS_EXPORTED),
+        ("deposit_withdrawal", EXPORT_STATUS_EXPORTED),
+        ("duplicate", EXPORT_STATUS_SKIPPED),
+        ("skipped_internal_credit", EXPORT_STATUS_SKIPPED),
+        ("skipped_collection", EXPORT_STATUS_SKIPPED),
+        ("review", EXPORT_STATUS_SKIPPED),
+        ("error", EXPORT_STATUS_ERROR),
+    ],
+)
+def test_export_status_for_maps_every_destination(destination, expected_status):
+    txn = _minimal_txn(destination)
+    assert _export_status_for(txn) == expected_status
+
+
 def test_write_farvision_status_back_for_run_writes_exported_and_skipped_rows(monkeypatch):
     transactions = [
         _minimal_txn("receipt_payment", source_sheet="Tab A", source_row_number=2),
@@ -3231,16 +3253,25 @@ def test_write_farvision_status_back_for_run_writes_exported_and_skipped_rows(mo
     write_farvision_status_back_for_run("spreadsheet-id", transactions, not_approved_rows, "run-1")
 
     assert ("spreadsheet-id", "Tab A", "Farvision Status") in ensured
+    assert ("spreadsheet-id", "Tab A", "Export Status") in ensured
     assert ("spreadsheet-id", "Tab B", "Farvision Status") in ensured
+    assert ("spreadsheet-id", "Tab B", "Export Status") in ensured
 
     tab_a_flags = next(flags for sid, name, flags in written if name == "Tab A")
-    tab_a_values = {(f["row_number"], f["value"]) for f in tab_a_flags}
-    assert (2, FARVISION_STATUS_EXPORTED) in tab_a_values
-    assert (3, FARVISION_STATUS_DUPLICATE) in tab_a_values
-    assert (4, FARVISION_STATUS_SKIPPED_APPROVAL) in tab_a_values
+    tab_a_values = {(f["row_number"], f["column"], f["value"]) for f in tab_a_flags}
+    assert (2, "Farvision Status", FARVISION_STATUS_EXPORTED) in tab_a_values
+    assert (2, "Export Status", EXPORT_STATUS_EXPORTED) in tab_a_values
+    assert (3, "Farvision Status", FARVISION_STATUS_DUPLICATE) in tab_a_values
+    assert (3, "Export Status", EXPORT_STATUS_SKIPPED) in tab_a_values
+    assert (4, "Farvision Status", FARVISION_STATUS_SKIPPED_APPROVAL) in tab_a_values
+    assert (4, "Export Status", EXPORT_STATUS_NOT_AUTH) in tab_a_values
 
     tab_b_flags = next(flags for sid, name, flags in written if name == "Tab B")
-    assert {(f["row_number"], f["value"]) for f in tab_b_flags} == {(2, FARVISION_STATUS_SKIPPED_APPROVAL)}
+    tab_b_values = {(f["row_number"], f["column"], f["value"]) for f in tab_b_flags}
+    assert tab_b_values == {
+        (2, "Farvision Status", FARVISION_STATUS_SKIPPED_APPROVAL),
+        (2, "Export Status", EXPORT_STATUS_NOT_AUTH),
+    }
 
 
 def test_write_farvision_status_back_for_run_skips_rows_with_no_source_row_number(monkeypatch):
