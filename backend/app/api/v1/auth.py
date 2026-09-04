@@ -53,7 +53,7 @@ def forgot_password() -> ForgotPasswordResponse:
         return ForgotPasswordResponse(sent=True)
 
     settings = get_settings()
-    if not settings.PASSWORD_RESET_RECIPIENT_EMAIL or not settings.RESEND_API_KEY:
+    if not settings.PASSWORD_RESET_RECIPIENT_EMAIL or not settings.SMTP_USERNAME or not settings.SMTP_PASSWORD:
         raise HTTPException(status_code=500, detail="Password reset is not configured.")
 
     token = app_config_repository.create_reset_token()
