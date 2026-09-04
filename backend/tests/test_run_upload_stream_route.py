@@ -110,3 +110,54 @@ def test_run_upload_stream_passes_sheet_names_to_parser():
     assert response.status_code == 200
     call_kwargs = mock_parse.call_args.kwargs
     assert call_kwargs["sheet_names"] == ["YES Rera 0377", "YES IDW 0490"]
+
+
+def test_run_upload_stream_gates_rows_by_approval_columns():
+    fake_rows = [
+        {"SL#": "1", "REFERENCE": "REF1", "Auth MB": "Yes"},
+        {"SL#": "2", "REFERENCE": "REF2", "Auth MB": "No"},
+    ]
+    approved_rows = [fake_rows[0]]
+
+    with patch(
+        "app.api.v1.automation.automation_engine.run_automation_stream",
+        side_effect=_fake_stream,
+    ) as mock_run, patch(
+        "app.api.v1.automation.statement_parser.parse_statement_file", return_value=fake_rows
+    ), patch(
+        "app.api.v1.automation.statement_parser.split_rows_by_approval",
+        return_value=(approved_rows, [fake_rows[1]]),
+    ) as mock_split:
+        content = _build_xlsx({"YES Master 0264": fake_rows})
+        response = client.post(
+            "/api/v1/automation/run-upload-stream?dry_run=true",
+            data={"approval_columns": ["Auth MB"]},
+            files={"file": ("statement.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        )
+
+    assert response.status_code == 200
+    mock_split.assert_called_once_with(fake_rows, ["Auth MB"])
+    mock_run.assert_called_once()
+    assert mock_run.call_args.kwargs["rows"] == approved_rows
+
+
+def test_run_upload_stream_skips_gating_when_no_approval_columns_given():
+    fake_rows = [{"SL#": "1", "REFERENCE": "REF1"}]
+
+    with patch(
+        "app.api.v1.automation.automation_engine.run_automation_stream",
+        side_effect=_fake_stream,
+    ) as mock_run, patch(
+        "app.api.v1.automation.statement_parser.parse_statement_file", return_value=fake_rows
+    ), patch(
+        "app.api.v1.automation.statement_parser.split_rows_by_approval"
+    ) as mock_split:
+        content = _build_xlsx({"YES Master 0264": fake_rows})
+        response = client.post(
+            "/api/v1/automation/run-upload-stream?dry_run=true",
+            files={"file": ("statement.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        )
+
+    assert response.status_code == 200
+    mock_split.assert_not_called()
+    assert mock_run.call_args.kwargs["rows"] == fake_rows

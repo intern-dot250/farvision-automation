@@ -73,6 +73,7 @@ async def list_sheet_names(file: UploadFile = File(...)) -> SheetNamesResponse:
         sheets=candidates.included,
         total_sheets=len(candidates.included) + len(candidates.ignored),
         ignored_sheets=candidates.ignored,
+        approval_columns=candidates.approval_columns,
     )
 
 
@@ -215,6 +216,7 @@ async def run_automation_upload_stream(
     file: UploadFile = File(...),
     sheet_name: str | None = Form(default=None),
     sheet_names: list[str] | None = Form(default=None),
+    approval_columns: list[str] | None = Form(default=None),
 ) -> StreamingResponse:
     content = await file.read()
 
@@ -227,6 +229,13 @@ async def run_automation_upload_stream(
 
     if not rows:
         raise HTTPException(status_code=400, detail="Uploaded file has no transaction rows")
+
+    # Same gating as /run-google-sheet-stream, minus the write-back half -
+    # an uploaded file has no destination to write a Farvision/Export Status
+    # column back into, so non-approved rows are simply excluded from the
+    # run rather than tracked anywhere.
+    if approval_columns:
+        rows, _ = statement_parser.split_rows_by_approval(rows, approval_columns)
 
     def event_stream():
         for event in automation_engine.run_automation_stream(dry_run=dry_run, rows=rows):

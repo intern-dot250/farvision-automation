@@ -283,6 +283,31 @@ def test_list_candidate_sheets_empty_for_csv():
     assert result.ignored == []
 
 
+def test_list_candidate_sheets_discovers_approval_columns():
+    df = pd.DataFrame(
+        [
+            {
+                "SL#": "1",
+                "TXN DATE": "22-Jul-2026",
+                "DESCRIPTION": "YIB-NEFT-REF1-Some Payee-SBIN0007204-Contractor-STATE BANK OF INDIA",
+                "REFERENCE": "REF1",
+                "DEBITS": "1000",
+                "CREDITS": "",
+                "Auth MB": "Yes",
+                "Auth MK": "",
+            }
+        ]
+    )
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer) as writer:
+        df.to_excel(writer, sheet_name="YES Master 0264", index=False)
+
+    result = list_candidate_sheets("statement.xlsx", buffer.getvalue())
+
+    assert result.included == ["YES Master 0264"]
+    assert result.approval_columns == ["Auth MB", "Auth MK"]
+
+
 def test_sheet_names_selects_specific_tabs():
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer) as writer:

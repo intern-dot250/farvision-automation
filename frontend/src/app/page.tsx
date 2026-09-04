@@ -122,6 +122,7 @@ export default function DashboardPage() {
         setSheetOptions(data.sheets);
         setTotalSheets(data.total_sheets);
         setIgnoredSheets(data.ignored_sheets);
+        setApprovalColumns(data.approval_columns ?? []);
         if (data.sheets.length === 1) {
           setSelectedSheetNames(data.sheets.slice(0, 1));
         } else {
@@ -163,8 +164,8 @@ export default function DashboardPage() {
       if (!file) return;
     } else {
       if (!spreadsheetId || selectedSheetNames.length === 0) return;
-      if (approvalColumns.length > 0 && selectedApprovalColumns.length === 0 && !noApprovalCheck) return;
     }
+    if (approvalColumns.length > 0 && selectedApprovalColumns.length === 0 && !noApprovalCheck) return;
 
     setRunning(true);
     setRunError(null);
@@ -180,6 +181,7 @@ export default function DashboardPage() {
                 ? selectedSheetNames
                 : undefined,
               setProgress,
+              approvalColumns.length > 0 && !noApprovalCheck ? selectedApprovalColumns : null,
             )
           : await runAutomationGoogleSheetStream(
               spreadsheetId as string,
@@ -441,7 +443,7 @@ export default function DashboardPage() {
             </div>
           )}
 
-          {!sheetOptionsLoading && sourceMode === "google_sheet" && approvalColumns.length > 0 && (
+          {!sheetOptionsLoading && approvalColumns.length > 0 && (
             <label className="flex flex-col gap-2">
               <span className="text-sm text-zinc-600 dark:text-zinc-400">
                 Select Approval Stage{approvalColumns.length > 1 ? "(s)" : ""}
@@ -499,11 +501,8 @@ export default function DashboardPage() {
               disabled={
                 running ||
                 sheetOptionsLoading ||
-                (sourceMode === "file"
-                  ? !file
-                  : !spreadsheetId ||
-                    selectedSheetNames.length === 0 ||
-                    (approvalColumns.length > 0 && selectedApprovalColumns.length === 0 && !noApprovalCheck))
+                (sourceMode === "file" ? !file : !spreadsheetId || selectedSheetNames.length === 0) ||
+                (approvalColumns.length > 0 && selectedApprovalColumns.length === 0 && !noApprovalCheck)
               }
               className="w-fit rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
             >
@@ -514,11 +513,8 @@ export default function DashboardPage() {
               disabled={
                 running ||
                 sheetOptionsLoading ||
-                (sourceMode === "file"
-                  ? !file
-                  : !spreadsheetId ||
-                    selectedSheetNames.length === 0 ||
-                    (approvalColumns.length > 0 && selectedApprovalColumns.length === 0 && !noApprovalCheck))
+                (sourceMode === "file" ? !file : !spreadsheetId || selectedSheetNames.length === 0) ||
+                (approvalColumns.length > 0 && selectedApprovalColumns.length === 0 && !noApprovalCheck)
               }
               className="w-fit rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700 disabled:opacity-50 dark:bg-emerald-500 dark:hover:bg-emerald-600"
             >

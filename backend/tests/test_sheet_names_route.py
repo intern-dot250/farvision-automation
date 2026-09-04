@@ -40,7 +40,38 @@ def test_sheet_names_route_returns_candidate_sheets():
         "sheets": ["YES Rera 0377"],
         "total_sheets": 2,
         "ignored_sheets": ["Index"],
+        "approval_columns": [],
     }
+
+
+def test_sheet_names_route_returns_discovered_approval_columns():
+    import pandas as pd
+
+    df = pd.DataFrame(
+        [
+            {
+                "SL#": "1",
+                "TXN DATE": "22-Jul-2026",
+                "DESCRIPTION": "desc",
+                "REFERENCE": "REF1",
+                "DEBITS": "1000",
+                "CREDITS": "",
+                "Auth MB": "Yes",
+            }
+        ]
+    )
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer) as writer:
+        df.to_excel(writer, sheet_name="YES Master 0264", index=False)
+    content = buffer.getvalue()
+
+    response = client.post(
+        "/api/v1/automation/sheet-names",
+        files={"file": ("statement.xlsx", content, "application/vnd.ms-excel")},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["approval_columns"] == ["Auth MB"]
 
 
 def test_sheet_names_route_returns_empty_for_csv():
@@ -50,4 +81,4 @@ def test_sheet_names_route_returns_empty_for_csv():
     )
 
     assert response.status_code == 200
-    assert response.json() == {"sheets": [], "total_sheets": 0, "ignored_sheets": []}
+    assert response.json() == {"sheets": [], "total_sheets": 0, "ignored_sheets": [], "approval_columns": []}

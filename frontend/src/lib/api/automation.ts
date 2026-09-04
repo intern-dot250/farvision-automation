@@ -38,6 +38,7 @@ export type SheetNamesResponse = {
   sheets: string[];
   total_sheets: number;
   ignored_sheets: string[];
+  approval_columns: string[];
 };
 
 export async function getSheetNames(file: File): Promise<SheetNamesResponse> {
@@ -129,6 +130,7 @@ export async function runAutomationUploadStream(
   sheetName: string | undefined,
   sheetNames: string[] | undefined,
   onProgress: (progress: UploadProgress) => void,
+  approvalColumns?: string[] | null,
 ): Promise<RunResponse> {
   const formData = new FormData();
   formData.append("file", file);
@@ -136,6 +138,9 @@ export async function runAutomationUploadStream(
     sheetNames.forEach((name) => formData.append("sheet_names", name));
   } else if (sheetName) {
     formData.append("sheet_name", sheetName);
+  }
+  if (approvalColumns && approvalColumns.length > 0) {
+    approvalColumns.forEach((column) => formData.append("approval_columns", column));
   }
 
   const response = await fetch(

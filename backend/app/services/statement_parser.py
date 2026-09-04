@@ -199,9 +199,17 @@ def list_candidate_sheets(filename: str, content: bytes) -> SheetCandidates:
         return SheetCandidates(included=[], ignored=[])
 
     sheets = pd.read_excel(io.BytesIO(content), dtype=str, header=None, sheet_name=None)
-    included = [name for name, raw in sheets.items() if _find_header_row(raw) is not None]
+    included = []
+    approval_columns: set[str] = set()
+    for name, raw in sheets.items():
+        header_row = _find_header_row(raw)
+        if header_row is None:
+            continue
+        included.append(name)
+        headers = [str(v).strip() for v in raw.iloc[header_row].tolist()]
+        approval_columns.update(h for h in headers if _APPROVAL_COLUMN_RE.match(h))
     ignored = [name for name in sheets if name not in included]
-    return SheetCandidates(included=included, ignored=ignored)
+    return SheetCandidates(included=included, ignored=ignored, approval_columns=sorted(approval_columns))
 
 
 def parse_statement_file(filename: str, content: bytes, sheet_name: str | None = None, sheet_names: list[str] | None = None) -> list[dict]:

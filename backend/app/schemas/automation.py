@@ -33,6 +33,7 @@ class SheetNamesResponse(BaseModel):
     sheets: list[str]
     total_sheets: int
     ignored_sheets: list[str]
+    approval_columns: list[str] = []
 
 
 class GoogleSheetTabsRequest(BaseModel):
