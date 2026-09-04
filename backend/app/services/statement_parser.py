@@ -156,13 +156,16 @@ def parse_google_sheet_tabs(sheet_id: str, sheet_names: list[str]) -> list[dict]
     return _drop_non_transaction_rows(df.to_dict(orient="records"))
 
 
-def split_rows_by_approval(rows: list[dict], approval_column: str) -> tuple[list[dict], list[dict]]:
+def split_rows_by_approval(rows: list[dict], approval_columns: list[str]) -> tuple[list[dict], list[dict]]:
     """Splits Google-Sheet-sourced rows (tagged with source_sheet/
     _source_row_number by parse_google_sheet_tabs above) into (approved,
-    not_approved), based on whether `approval_column` is non-blank for that
-    row - "approved" means any non-blank value, confirmed with the user (the
+    not_approved), based on whether every column in `approval_columns` is
+    non-blank for that row (AND across columns) - "approved" means any
+    non-blank value in each selected column, confirmed with the user (the
     accounts team writes whatever they use for a completed approval, this
-    codebase never dictates or reads a specific value).
+    codebase never dictates or reads a specific value). Selecting more than
+    one column means a row only counts as approved once all of them are
+    filled in.
 
     A row whose Farvision Status is already "Exported" from a prior run is
     excluded from both buckets - it's already been handled, so re-running
@@ -174,7 +177,7 @@ def split_rows_by_approval(rows: list[dict], approval_column: str) -> tuple[list
     for row in rows:
         if str(row.get(FARVISION_STATUS_COLUMN, "")).strip() == FARVISION_STATUS_EXPORTED:
             continue
-        if str(row.get(approval_column, "")).strip():
+        if all(str(row.get(col, "")).strip() for col in approval_columns):
             approved.append(row)
         else:
             not_approved.append(row)

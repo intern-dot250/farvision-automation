@@ -43,9 +43,9 @@ export default function DashboardPage() {
   // "APPROVAL 1"/"APPROVAL 2"/... columns, discovered dynamically per sheet
   // (never hardcoded to a fixed count). "" means nothing picked yet - no
   // silent default gating choice is ever made.
-  const NO_APPROVAL_CHECK_OPTION = "__no_approval_check__";
   const [approvalColumns, setApprovalColumns] = useState<string[]>([]);
-  const [selectedApprovalOption, setSelectedApprovalOption] = useState("");
+  const [selectedApprovalColumns, setSelectedApprovalColumns] = useState<string[]>([]);
+  const [noApprovalCheck, setNoApprovalCheck] = useState(false);
 
   const [showClearPanel, setShowClearPanel] = useState(false);
   const [clearTarget, setClearTarget] = useState<ClearSheetTarget>("receipt_payment");
@@ -95,7 +95,8 @@ export default function DashboardPage() {
     setIgnoredSheets([]);
     setShowIgnored(false);
     setApprovalColumns([]);
-    setSelectedApprovalOption("");
+    setSelectedApprovalColumns([]);
+    setNoApprovalCheck(false);
   };
 
   const handleSourceModeChange = (mode: "file" | "google_sheet") => {
@@ -162,7 +163,7 @@ export default function DashboardPage() {
       if (!file) return;
     } else {
       if (!spreadsheetId || selectedSheetNames.length === 0) return;
-      if (approvalColumns.length > 0 && !selectedApprovalOption) return;
+      if (approvalColumns.length > 0 && selectedApprovalColumns.length === 0 && !noApprovalCheck) return;
     }
 
     setRunning(true);
@@ -185,9 +186,7 @@ export default function DashboardPage() {
               selectedSheetNames,
               dryRun,
               setProgress,
-              approvalColumns.length > 0 && selectedApprovalOption !== NO_APPROVAL_CHECK_OPTION
-                ? selectedApprovalOption
-                : null,
+              approvalColumns.length > 0 && !noApprovalCheck ? selectedApprovalColumns : null,
             );
       setResult(response);
       loadStats();
@@ -445,32 +444,48 @@ export default function DashboardPage() {
           {!sheetOptionsLoading && sourceMode === "google_sheet" && approvalColumns.length > 0 && (
             <label className="flex flex-col gap-2">
               <span className="text-sm text-zinc-600 dark:text-zinc-400">
-                Select Approval Stage
+                Select Approval Stage{approvalColumns.length > 1 ? "(s)" : ""}
               </span>
-              <select
-                value={selectedApprovalOption}
-                onChange={(e) => setSelectedApprovalOption(e.target.value)}
-                disabled={running}
-                className="w-fit rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
-              >
-                <option value="" disabled>
-                  Choose an approval stage…
-                </option>
+              <div className="flex flex-col gap-1">
                 {approvalColumns.map((column) => (
-                  <option key={column} value={column}>
-                    {column}
-                  </option>
+                  <label key={column} className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={selectedApprovalColumns.includes(column)}
+                      onChange={(e) => {
+                        setNoApprovalCheck(false);
+                        setSelectedApprovalColumns((prev) =>
+                          e.target.checked ? [...prev, column] : prev.filter((c) => c !== column)
+                        );
+                      }}
+                      disabled={running}
+                      className="rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                    />
+                    <span className="text-sm text-zinc-700 dark:text-zinc-300">{column}</span>
+                  </label>
                 ))}
-                <option value={NO_APPROVAL_CHECK_OPTION}>
-                  No Approval Check (approval ignored, other rules still apply)
-                </option>
-              </select>
-              {!selectedApprovalOption && (
+                <label className="mt-1 flex items-center gap-2 border-t border-zinc-200 pt-1 dark:border-zinc-800">
+                  <input
+                    type="checkbox"
+                    checked={noApprovalCheck}
+                    onChange={(e) => {
+                      setNoApprovalCheck(e.target.checked);
+                      if (e.target.checked) setSelectedApprovalColumns([]);
+                    }}
+                    disabled={running}
+                    className="rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                  />
+                  <span className="text-sm text-zinc-700 dark:text-zinc-300">
+                    No Approval Check (approval ignored, other rules still apply)
+                  </span>
+                </label>
+              </div>
+              {selectedApprovalColumns.length === 0 && !noApprovalCheck && (
                 <p className="text-sm text-red-600 dark:text-red-400">
-                  Please select an approval stage before running.
+                  Please select at least one approval stage before running.
                 </p>
               )}
-              {selectedApprovalOption === NO_APPROVAL_CHECK_OPTION && (
+              {noApprovalCheck && (
                 <p className="text-sm text-amber-600 dark:text-amber-400">
                   Approval check disabled — all selected rows will be processed regardless of approval status.
                 </p>
@@ -488,7 +503,7 @@ export default function DashboardPage() {
                   ? !file
                   : !spreadsheetId ||
                     selectedSheetNames.length === 0 ||
-                    (approvalColumns.length > 0 && !selectedApprovalOption))
+                    (approvalColumns.length > 0 && selectedApprovalColumns.length === 0 && !noApprovalCheck))
               }
               className="w-fit rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
             >
@@ -503,7 +518,7 @@ export default function DashboardPage() {
                   ? !file
                   : !spreadsheetId ||
                     selectedSheetNames.length === 0 ||
-                    (approvalColumns.length > 0 && !selectedApprovalOption))
+                    (approvalColumns.length > 0 && selectedApprovalColumns.length === 0 && !noApprovalCheck))
               }
               className="w-fit rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700 disabled:opacity-50 dark:bg-emerald-500 dark:hover:bg-emerald-600"
             >

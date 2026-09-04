@@ -154,7 +154,7 @@ export async function runAutomationGoogleSheetStream(
   sheetNames: string[],
   dryRun: boolean,
   onProgress: (progress: UploadProgress) => void,
-  approvalColumn?: string | null,
+  approvalColumns?: string[] | null,
 ): Promise<RunResponse> {
   const response = await fetch(
     `${API_BASE_URL}/automation/run-google-sheet-stream?dry_run=${dryRun}`,
@@ -164,7 +164,7 @@ export async function runAutomationGoogleSheetStream(
       body: JSON.stringify({
         spreadsheet_id: spreadsheetId,
         sheet_names: sheetNames,
-        approval_column: approvalColumn ?? null,
+        approval_columns: approvalColumns && approvalColumns.length > 0 ? approvalColumns : null,
       }),
     },
   );

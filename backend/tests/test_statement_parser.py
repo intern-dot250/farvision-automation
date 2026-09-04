@@ -605,7 +605,20 @@ def test_split_rows_by_approval_separates_blank_and_filled():
         {"REFERENCE": "REF3", "APPROVAL 1": "   "},
     ]
 
-    approved, not_approved = split_rows_by_approval(rows, "APPROVAL 1")
+    approved, not_approved = split_rows_by_approval(rows, ["APPROVAL 1"])
+
+    assert [r["REFERENCE"] for r in approved] == ["REF1"]
+    assert [r["REFERENCE"] for r in not_approved] == ["REF2", "REF3"]
+
+
+def test_split_rows_by_approval_requires_all_selected_columns_filled():
+    rows = [
+        {"REFERENCE": "REF1", "APPROVAL 1": "yes", "APPROVAL 2": "yes"},
+        {"REFERENCE": "REF2", "APPROVAL 1": "yes", "APPROVAL 2": ""},
+        {"REFERENCE": "REF3", "APPROVAL 1": "", "APPROVAL 2": "yes"},
+    ]
+
+    approved, not_approved = split_rows_by_approval(rows, ["APPROVAL 1", "APPROVAL 2"])
 
     assert [r["REFERENCE"] for r in approved] == ["REF1"]
     assert [r["REFERENCE"] for r in not_approved] == ["REF2", "REF3"]
@@ -618,7 +631,7 @@ def test_split_rows_by_approval_excludes_already_exported_rows():
         {"REFERENCE": "REF3", "APPROVAL 1": "", FARVISION_STATUS_COLUMN: "Exported"},
     ]
 
-    approved, not_approved = split_rows_by_approval(rows, "APPROVAL 1")
+    approved, not_approved = split_rows_by_approval(rows, ["APPROVAL 1"])
 
     assert [r["REFERENCE"] for r in approved] == ["REF2"]
     assert not_approved == []

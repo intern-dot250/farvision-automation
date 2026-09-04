@@ -51,7 +51,7 @@ class GoogleSheetTabsResponse(BaseModel):
 class GoogleSheetRunRequest(BaseModel):
     spreadsheet_id: str
     sheet_names: list[str]
-    approval_column: str | None = None
+    approval_columns: list[str] | None = None
 
 
 class ClearedSheet(BaseModel):

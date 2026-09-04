@@ -184,11 +184,11 @@ def test_run_google_sheet_stream_filters_by_approval_column_and_writes_status_ba
     ) as mock_write_back:
         response = client.post(
             "/api/v1/automation/run-google-sheet-stream?dry_run=false",
-            json={"spreadsheet_id": "sheet-id", "sheet_names": ["Tab A"], "approval_column": "APPROVAL 1"},
+            json={"spreadsheet_id": "sheet-id", "sheet_names": ["Tab A"], "approval_columns": ["APPROVAL 1"]},
         )
 
     assert response.status_code == 200
-    mock_split.assert_called_once_with(fake_rows, "APPROVAL 1")
+    mock_split.assert_called_once_with(fake_rows, ["APPROVAL 1"])
     mock_write_back.assert_called_once()
     call_args = mock_write_back.call_args.args
     assert call_args[0] == "sheet-id"
@@ -210,7 +210,7 @@ def test_run_google_sheet_stream_dry_run_does_not_write_status_back():
     ) as mock_write_back:
         response = client.post(
             "/api/v1/automation/run-google-sheet-stream?dry_run=true",
-            json={"spreadsheet_id": "sheet-id", "sheet_names": ["Tab A"], "approval_column": "APPROVAL 1"},
+            json={"spreadsheet_id": "sheet-id", "sheet_names": ["Tab A"], "approval_columns": ["APPROVAL 1"]},
         )
 
     assert response.status_code == 200

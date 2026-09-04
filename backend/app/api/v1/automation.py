@@ -139,15 +139,17 @@ def run_automation_google_sheet_stream(body: GoogleSheetRunRequest, dry_run: boo
     if not rows:
         raise HTTPException(status_code=400, detail="Selected sheet(s) have no transaction rows")
 
-    # Approval gating only ever activates when the caller picked a real
-    # approval stage (the frontend's "No Approval Check" option sends
-    # approval_column: null, which is exactly this branch's else - today's
-    # already-shipped, byte-for-byte-identical no-gating behavior). Only
-    # approved rows reach the pipeline; not_approved_rows is written back as
-    # "Skipped (Approval Pending)" below, independently of the pipeline run.
+    # Approval gating only ever activates when the caller picked at least one
+    # real approval stage (the frontend's "No Approval Check" option sends
+    # approval_columns: null/[], which is exactly this branch's else -
+    # today's already-shipped, byte-for-byte-identical no-gating behavior).
+    # A row is only "approved" once every selected column is filled (AND).
+    # Only approved rows reach the pipeline; not_approved_rows is written
+    # back as "Skipped (Approval Pending)" below, independently of the
+    # pipeline run.
     not_approved_rows: list[dict] = []
-    if body.approval_column:
-        rows, not_approved_rows = statement_parser.split_rows_by_approval(rows, body.approval_column)
+    if body.approval_columns:
+        rows, not_approved_rows = statement_parser.split_rows_by_approval(rows, body.approval_columns)
 
     def event_stream():
         for event in automation_engine.run_automation_stream(dry_run=dry_run, rows=rows):
@@ -159,7 +161,7 @@ def run_automation_google_sheet_stream(body: GoogleSheetRunRequest, dry_run: boo
                 # automation_engine.py. A failure here is logged but never
                 # raised (see write_farvision_status_back_for_run), so it
                 # can never turn a completed run into a stream error.
-                if body.approval_column and not dry_run:
+                if body.approval_columns and not dry_run:
                     automation_engine.write_farvision_status_back_for_run(
                         body.spreadsheet_id, result.transactions, not_approved_rows, result.run_id,
                     )
