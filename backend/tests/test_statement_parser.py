@@ -600,7 +600,7 @@ def test_parse_google_sheet_tabs_tags_source_row_number():
 
 def test_split_rows_by_approval_separates_blank_and_filled():
     rows = [
-        {"REFERENCE": "REF1", "APPROVAL 1": "Approved by AB"},
+        {"REFERENCE": "REF1", "APPROVAL 1": "Yes"},
         {"REFERENCE": "REF2", "APPROVAL 1": ""},
         {"REFERENCE": "REF3", "APPROVAL 1": "   "},
     ]
@@ -609,6 +609,33 @@ def test_split_rows_by_approval_separates_blank_and_filled():
 
     assert [r["REFERENCE"] for r in approved] == ["REF1"]
     assert [r["REFERENCE"] for r in not_approved] == ["REF2", "REF3"]
+
+
+def test_split_rows_by_approval_rejects_explicit_no():
+    # "No" is a non-blank value but an explicit rejection - must NOT be
+    # treated as approved just because the cell isn't empty.
+    rows = [
+        {"REFERENCE": "REF1", "APPROVAL 1": "Yes"},
+        {"REFERENCE": "REF2", "APPROVAL 1": "No"},
+    ]
+
+    approved, not_approved = split_rows_by_approval(rows, ["APPROVAL 1"])
+
+    assert [r["REFERENCE"] for r in approved] == ["REF1"]
+    assert [r["REFERENCE"] for r in not_approved] == ["REF2"]
+
+
+def test_split_rows_by_approval_matches_yes_case_insensitively_and_trimmed():
+    rows = [
+        {"REFERENCE": "REF1", "APPROVAL 1": "YES"},
+        {"REFERENCE": "REF2", "APPROVAL 1": " yes "},
+        {"REFERENCE": "REF3", "APPROVAL 1": "yEs"},
+    ]
+
+    approved, not_approved = split_rows_by_approval(rows, ["APPROVAL 1"])
+
+    assert [r["REFERENCE"] for r in approved] == ["REF1", "REF2", "REF3"]
+    assert not_approved == []
 
 
 def test_split_rows_by_approval_requires_all_selected_columns_filled():
