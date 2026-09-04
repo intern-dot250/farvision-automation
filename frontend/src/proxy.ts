@@ -4,9 +4,8 @@ import { SESSION_COOKIE, isValidSession } from "@/lib/auth";
 const PUBLIC_PATHS = new Set([
   "/login",
   "/api/login",
-  "/reset-password",
-  "/api/forgot-password",
-  "/api/reset-password",
+  "/api/auth/google",
+  "/api/auth/google/callback",
 ]);
 
 export default function proxy(request: NextRequest) {

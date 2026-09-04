@@ -52,20 +52,6 @@ class Settings(BaseSettings):
     # independent of the (now resettable) dashboard password.
     INTERNAL_API_SECRET: str = ""
 
-    # Password-reset email delivery via Gmail SMTP + an App Password (stdlib
-    # smtplib - see app/services/email_client.py). No domain verification
-    # needed, unlike a transactional-email API's sandbox mode.
-    # PASSWORD_RESET_RECIPIENT_EMAIL is a single fixed address (there are no
-    # individual user accounts), so the forgot-password flow never takes an
-    # email address as input.
-    SMTP_HOST: str = "smtp.gmail.com"
-    SMTP_PORT: int = 587
-    SMTP_USERNAME: str = ""
-    SMTP_PASSWORD: str = ""
-    SMTP_FROM_EMAIL: str = ""
-    PASSWORD_RESET_RECIPIENT_EMAIL: str = ""
-    PASSWORD_RESET_BASE_URL: str = "https://fv.tallstone.in"
-
 
 @lru_cache
 def get_settings() -> Settings:

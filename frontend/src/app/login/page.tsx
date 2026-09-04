@@ -1,36 +1,23 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useState, type FormEvent } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Card } from "@/components/ui/card";
 
-export default function LoginPage() {
+const GOOGLE_ERROR_MESSAGES: Record<string, string> = {
+  google_cancelled: "Google sign-in was cancelled.",
+  google_unauthorized: "This Google account isn't authorized for this dashboard.",
+  google_failed: "Google sign-in failed. Please try again.",
+};
+
+function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const googleError = searchParams.get("error");
+
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-
-  const [forgotSubmitting, setForgotSubmitting] = useState(false);
-  const [forgotSent, setForgotSent] = useState(false);
-  const [forgotError, setForgotError] = useState<string | null>(null);
-
-  async function handleForgotPassword() {
-    setForgotSubmitting(true);
-    setForgotError(null);
-    try {
-      const response = await fetch("/api/forgot-password", { method: "POST" });
-      if (!response.ok) {
-        const data = await response.json().catch(() => null);
-        setForgotError(data?.error ?? "Failed to send reset email");
-        return;
-      }
-      setForgotSent(true);
-    } catch {
-      setForgotError("Something went wrong. Please try again.");
-    } finally {
-      setForgotSubmitting(false);
-    }
-  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -99,25 +86,34 @@ export default function LoginPage() {
             </button>
           </form>
 
-          <div className="mt-4 text-center">
-            {forgotSent ? (
-              <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                Reset link sent to nycjain@gmail.com. Check that inbox for a link to set a new password.
-              </p>
-            ) : (
-              <button
-                type="button"
-                onClick={handleForgotPassword}
-                disabled={forgotSubmitting}
-                className="text-sm text-indigo-600 hover:underline disabled:opacity-60 dark:text-indigo-400"
-              >
-                {forgotSubmitting ? "Sending..." : "Forgot password?"}
-              </button>
-            )}
-            {forgotError && <p className="mt-2 text-sm text-red-600 dark:text-red-400">{forgotError}</p>}
+          <div className="my-4 flex items-center gap-3">
+            <div className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
+            <span className="text-xs text-zinc-400 dark:text-zinc-600">or</span>
+            <div className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
           </div>
+
+          <a
+            href="/api/auth/google"
+            className="flex w-full items-center justify-center gap-2 rounded-md border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-900"
+          >
+            Continue with Google
+          </a>
+
+          {googleError && (
+            <p className="mt-3 text-center text-sm text-red-600 dark:text-red-400">
+              {GOOGLE_ERROR_MESSAGES[googleError] ?? "Google sign-in failed. Please try again."}
+            </p>
+          )}
         </Card>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense>
+      <LoginForm />
+    </Suspense>
   );
 }
