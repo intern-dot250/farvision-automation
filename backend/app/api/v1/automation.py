@@ -250,14 +250,15 @@ async def run_automation_upload_stream(
 
 def _verify_internal_secret(x_internal_secret: str | None) -> None:
     """Guards /clear-sheet specifically (the one endpoint in this API that
-    permanently deletes data) - checked against ACCESS_PASSWORD, the same
-    secret already shared between the frontend and backend halves of this
-    Vercel project. Only the frontend's own server-side /api/clear-sheet
+    permanently deletes data) - checked against INTERNAL_API_SECRET, a
+    static secret shared between the frontend and backend halves of this
+    Vercel project, deliberately independent of the (resettable) dashboard
+    login password. Only the frontend's own server-side /api/clear-sheet
     proxy route (gated by a logged-in dashboard session) knows this value;
     it's never sent to the browser. Every other endpoint in this API is
     intentionally left as-is - this is a scoped fix for the most dangerous
     action, not a full backend-auth overhaul."""
-    expected = get_settings().ACCESS_PASSWORD
+    expected = get_settings().INTERNAL_API_SECRET
     if not expected or not x_internal_secret or not hmac.compare_digest(x_internal_secret, expected):
         raise HTTPException(status_code=401, detail="Missing or invalid internal secret")
 

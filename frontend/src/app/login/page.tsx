@@ -10,6 +10,28 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  const [forgotSubmitting, setForgotSubmitting] = useState(false);
+  const [forgotSent, setForgotSent] = useState(false);
+  const [forgotError, setForgotError] = useState<string | null>(null);
+
+  async function handleForgotPassword() {
+    setForgotSubmitting(true);
+    setForgotError(null);
+    try {
+      const response = await fetch("/api/forgot-password", { method: "POST" });
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        setForgotError(data?.error ?? "Failed to send reset email");
+        return;
+      }
+      setForgotSent(true);
+    } catch {
+      setForgotError("Something went wrong. Please try again.");
+    } finally {
+      setForgotSubmitting(false);
+    }
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSubmitting(true);
@@ -76,6 +98,24 @@ export default function LoginPage() {
               {submitting ? "Logging in..." : "Login"}
             </button>
           </form>
+
+          <div className="mt-4 text-center">
+            {forgotSent ? (
+              <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                Reset link sent to nycjain@gmail.com. Check that inbox for a link to set a new password.
+              </p>
+            ) : (
+              <button
+                type="button"
+                onClick={handleForgotPassword}
+                disabled={forgotSubmitting}
+                className="text-sm text-indigo-600 hover:underline disabled:opacity-60 dark:text-indigo-400"
+              >
+                {forgotSubmitting ? "Sending..." : "Forgot password?"}
+              </button>
+            )}
+            {forgotError && <p className="mt-2 text-sm text-red-600 dark:text-red-400">{forgotError}</p>}
+          </div>
         </Card>
       </div>
     </div>

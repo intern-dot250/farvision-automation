@@ -7,3 +7,4 @@ class Tags:
     AUTOMATION = "Automation"
     HISTORY = "History"
     OVERRIDE_RULES = "Override Rules"
+    AUTH = "Auth"

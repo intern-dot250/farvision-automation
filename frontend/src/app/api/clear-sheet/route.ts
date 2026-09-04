@@ -34,7 +34,7 @@ export async function POST(request: NextRequest) {
   const response = await fetch(backendUrl, {
     method: "POST",
     headers: {
-      "X-Internal-Secret": process.env.ACCESS_PASSWORD ?? "",
+      "X-Internal-Secret": process.env.INTERNAL_API_SECRET ?? "",
     },
   });
 

@@ -8,7 +8,7 @@ client = TestClient(app)
 
 
 class _FakeSettings:
-    ACCESS_PASSWORD = "test-secret"
+    INTERNAL_API_SECRET = "test-secret"
 
 
 def test_clear_sheet_rejects_missing_secret():
@@ -29,10 +29,10 @@ def test_clear_sheet_rejects_wrong_secret():
 
 
 def test_clear_sheet_rejects_unset_access_password():
-    # ACCESS_PASSWORD isn't configured (empty string) - never treat that as
+    # INTERNAL_API_SECRET isn't configured (empty string) - never treat that as
     # "no check needed"; every request must be rejected in that state.
     class _NoPassword:
-        ACCESS_PASSWORD = ""
+        INTERNAL_API_SECRET = ""
 
     with patch("app.api.v1.automation.get_settings", return_value=_NoPassword()):
         response = client.post(

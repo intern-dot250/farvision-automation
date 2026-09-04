@@ -39,12 +39,27 @@ class Settings(BaseSettings):
     SUPABASE_URL: str = ""
     SUPABASE_SERVICE_ROLE_KEY: str = ""
 
-    # Shared with the frontend's dashboard-login password (same Vercel
-    # project, same env var) - reused as a server-to-server secret so the
-    # destructive /automation/clear-sheet endpoint can require the frontend's
-    # Next.js proxy route to prove it's acting on behalf of a logged-in
-    # session, without ever exposing the password to the browser itself.
+    # One-time migration seed only - read once to seed app_config's password
+    # hash on first deploy after this feature shipped (see
+    # app_config_repository.seed_password_if_empty). Never read at request
+    # time; the live dashboard password lives in Supabase (app_config table)
+    # so it can be reset without an env var edit or redeploy.
     ACCESS_PASSWORD: str = ""
+
+    # Static secret so the frontend's /api/clear-sheet proxy route can prove
+    # to the backend it's acting on behalf of a logged-in session, without
+    # ever exposing anything password-related to the browser. Deliberately
+    # independent of the (now resettable) dashboard password.
+    INTERNAL_API_SECRET: str = ""
+
+    # Password-reset email delivery (Resend's HTTP API, called via httpx -
+    # see app/services/email_client.py). PASSWORD_RESET_RECIPIENT_EMAIL is a
+    # single fixed address (there are no individual user accounts), so the
+    # forgot-password flow never takes an email address as input.
+    RESEND_API_KEY: str = ""
+    RESEND_FROM_EMAIL: str = ""
+    PASSWORD_RESET_RECIPIENT_EMAIL: str = ""
+    PASSWORD_RESET_BASE_URL: str = "https://fv.tallstone.in"
 
 
 @lru_cache
