@@ -50,3 +50,50 @@ def test_verify_password_no_row_and_wrong_legacy_password_fails():
 
     assert response.status_code == 200
     assert response.json() == {"valid": False}
+
+
+class _InternalSecretSettings:
+    INTERNAL_API_SECRET = "test-secret"
+
+
+def test_set_password_rejects_missing_secret():
+    response = client.post("/api/v1/auth/set-password", json={"new_password": "new-password-123"})
+
+    assert response.status_code == 401
+
+
+def test_set_password_rejects_wrong_secret():
+    with patch("app.api.v1.auth.get_settings", return_value=_InternalSecretSettings()):
+        response = client.post(
+            "/api/v1/auth/set-password",
+            json={"new_password": "new-password-123"},
+            headers={"X-Internal-Secret": "wrong-value"},
+        )
+
+    assert response.status_code == 401
+
+
+def test_set_password_rejects_short_password():
+    with patch("app.api.v1.auth.get_settings", return_value=_InternalSecretSettings()):
+        response = client.post(
+            "/api/v1/auth/set-password",
+            json={"new_password": "short"},
+            headers={"X-Internal-Secret": "test-secret"},
+        )
+
+    assert response.status_code == 422
+
+
+def test_set_password_succeeds_with_valid_secret():
+    with patch("app.api.v1.auth.get_settings", return_value=_InternalSecretSettings()), patch(
+        "app.api.v1.auth.app_config_repository.set_password"
+    ) as mock_set:
+        response = client.post(
+            "/api/v1/auth/set-password",
+            json={"new_password": "new-password-123"},
+            headers={"X-Internal-Secret": "test-secret"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"success": True}
+    mock_set.assert_called_once_with("new-password-123")

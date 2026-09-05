@@ -20,6 +20,12 @@ export default function SettingsPage() {
   const [orphanError, setOrphanError] = useState<string | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
 
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordSubmitting, setPasswordSubmitting] = useState(false);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [passwordSuccess, setPasswordSuccess] = useState(false);
+
   useEffect(() => {
     getSheetsStatus()
       .then((data) => setSheets(data.sheets))
@@ -34,6 +40,43 @@ export default function SettingsPage() {
       router.refresh();
     } finally {
       setLoggingOut(false);
+    }
+  };
+
+  const handleChangePassword = async () => {
+    setPasswordSuccess(false);
+    setPasswordError(null);
+
+    if (newPassword.length < 8) {
+      setPasswordError("Password must be at least 8 characters");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPasswordError("Passwords don't match");
+      return;
+    }
+
+    setPasswordSubmitting(true);
+    try {
+      const response = await fetch("/api/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ new_password: newPassword }),
+      });
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        setPasswordError(data?.error ?? "Failed to change password");
+        return;
+      }
+
+      setPasswordSuccess(true);
+      setNewPassword("");
+      setConfirmPassword("");
+    } catch {
+      setPasswordError("Something went wrong. Please try again.");
+    } finally {
+      setPasswordSubmitting(false);
     }
   };
 
@@ -72,6 +115,40 @@ export default function SettingsPage() {
             className="rounded-md border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
           >
             {loggingOut ? "Logging out…" : "Logout"}
+          </button>
+        </div>
+      </Card>
+
+      <Card title="Change Password">
+        <div className="flex flex-col gap-3">
+          <p className="text-sm text-zinc-500 dark:text-zinc-400">
+            Sets a new dashboard password for everyone who logs in with the password field
+            (signed-in Google accounts are unaffected).
+          </p>
+          <input
+            type="password"
+            value={newPassword}
+            onChange={(event) => setNewPassword(event.target.value)}
+            placeholder="New password"
+            className="w-full max-w-sm rounded-md border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+          />
+          <input
+            type="password"
+            value={confirmPassword}
+            onChange={(event) => setConfirmPassword(event.target.value)}
+            placeholder="Confirm new password"
+            className="w-full max-w-sm rounded-md border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+          />
+          {passwordError && <p className="text-sm text-red-600 dark:text-red-400">{passwordError}</p>}
+          {passwordSuccess && (
+            <p className="text-sm text-green-600 dark:text-green-400">Password updated.</p>
+          )}
+          <button
+            onClick={handleChangePassword}
+            disabled={passwordSubmitting}
+            className="w-fit rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {passwordSubmitting ? "Saving…" : "Change Password"}
           </button>
         </div>
       </Card>

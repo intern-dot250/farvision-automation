@@ -1,13 +1,28 @@
+import hmac
 import secrets
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Header, HTTPException
 
 from app.core.config import get_settings
 from app.core.constants import Tags
-from app.schemas.auth import VerifyPasswordRequest, VerifyPasswordResponse
+from app.schemas.auth import (
+    SetPasswordRequest,
+    SetPasswordResponse,
+    VerifyPasswordRequest,
+    VerifyPasswordResponse,
+)
 from app.services import app_config_repository
 
 router = APIRouter(prefix="/auth", tags=[Tags.AUTH])
+
+
+def _verify_internal_secret(x_internal_secret: str | None) -> None:
+    """Same guard as automation.py's /clear-sheet - checked against the
+    static INTERNAL_API_SECRET shared between this API and the frontend's
+    own server-side routes, never exposed to the browser."""
+    expected = get_settings().INTERNAL_API_SECRET
+    if not expected or not x_internal_secret or not hmac.compare_digest(x_internal_secret, expected):
+        raise HTTPException(status_code=401, detail="Missing or invalid internal secret")
 
 
 @router.post(
@@ -30,3 +45,14 @@ def verify_password(body: VerifyPasswordRequest) -> VerifyPasswordResponse:
         return VerifyPasswordResponse(valid=False)
 
     return VerifyPasswordResponse(valid=app_config_repository.verify_password(body.password, stored_hash))
+
+
+@router.post(
+    "/set-password",
+    response_model=SetPasswordResponse,
+    summary="Change the dashboard password - called only by the frontend's session-gated /api/change-password route",
+)
+def set_password(body: SetPasswordRequest, x_internal_secret: str | None = Header(default=None)) -> SetPasswordResponse:
+    _verify_internal_secret(x_internal_secret)
+    app_config_repository.set_password(body.new_password)
+    return SetPasswordResponse(success=True)

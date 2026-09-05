@@ -104,6 +104,10 @@ function LoginForm() {
               {GOOGLE_ERROR_MESSAGES[googleError] ?? "Google sign-in failed. Please try again."}
             </p>
           )}
+
+          <p className="mt-4 text-center text-xs text-zinc-400 dark:text-zinc-600">
+            Forgot the password? Sign in with Google above, then set a new one from Settings.
+          </p>
         </Card>
       </div>
     </div>
