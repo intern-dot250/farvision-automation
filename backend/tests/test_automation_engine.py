@@ -3241,17 +3241,21 @@ def test_write_farvision_status_back_for_run_writes_exported_and_skipped_rows(mo
 
     ensured = []
     written = []
-    def _fake_ensure_column(sheet_id, sheet_name, column):
+    def _fake_ensure_column(sheet_id, sheet_name, column, header_row=1):
         ensured.append((sheet_id, sheet_name, column))
         return column
 
+    monkeypatch.setattr(
+        "app.services.automation_engine.sheets_client.find_source_header_row",
+        lambda sheet_id, sheet_name: 1,
+    )
     monkeypatch.setattr(
         "app.services.automation_engine.sheets_client.ensure_column",
         _fake_ensure_column,
     )
     monkeypatch.setattr(
         "app.services.automation_engine.sheets_client.batch_apply_cell_flags",
-        lambda sheet_id, sheet_name, flags: written.append((sheet_id, sheet_name, flags)),
+        lambda sheet_id, sheet_name, flags, header_row=1: written.append((sheet_id, sheet_name, flags)),
     )
 
     write_farvision_status_back_for_run("spreadsheet-id", transactions, not_approved_rows, "run-1")
@@ -3288,12 +3292,16 @@ def test_write_farvision_status_back_for_run_writes_through_resolved_column_name
 
     written = []
     monkeypatch.setattr(
+        "app.services.automation_engine.sheets_client.find_source_header_row",
+        lambda sheet_id, sheet_name: 1,
+    )
+    monkeypatch.setattr(
         "app.services.automation_engine.sheets_client.ensure_column",
-        lambda sheet_id, sheet_name, column: "Export status" if column == "Export Status" else column,
+        lambda sheet_id, sheet_name, column, header_row=1: "Export status" if column == "Export Status" else column,
     )
     monkeypatch.setattr(
         "app.services.automation_engine.sheets_client.batch_apply_cell_flags",
-        lambda sheet_id, sheet_name, flags: written.append(flags),
+        lambda sheet_id, sheet_name, flags, header_row=1: written.append(flags),
     )
 
     write_farvision_status_back_for_run("spreadsheet-id", transactions, [], "run-1")
@@ -3301,6 +3309,37 @@ def test_write_farvision_status_back_for_run_writes_through_resolved_column_name
     columns_written = {f["column"] for f in written[0]}
     assert "Export status" in columns_written
     assert "Export Status" not in columns_written
+
+
+def test_write_farvision_status_back_for_run_uses_detected_header_row(monkeypatch):
+    # Confirms the row detected by find_source_header_row is threaded
+    # through to both ensure_column and batch_apply_cell_flags - this is
+    # what keeps the status columns from landing on row 1 (and overwriting
+    # whatever unrelated column sits there) on sheets whose real header is
+    # elsewhere, e.g. row 2.
+    transactions = [_minimal_txn("receipt_payment", source_sheet="Tab A", source_row_number=2)]
+
+    ensure_column_calls = []
+    batch_calls = []
+    monkeypatch.setattr(
+        "app.services.automation_engine.sheets_client.find_source_header_row",
+        lambda sheet_id, sheet_name: 2,
+    )
+    monkeypatch.setattr(
+        "app.services.automation_engine.sheets_client.ensure_column",
+        lambda sheet_id, sheet_name, column, header_row=1: (
+            ensure_column_calls.append(header_row), column
+        )[1],
+    )
+    monkeypatch.setattr(
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags",
+        lambda sheet_id, sheet_name, flags, header_row=1: batch_calls.append(header_row),
+    )
+
+    write_farvision_status_back_for_run("spreadsheet-id", transactions, [], "run-1")
+
+    assert ensure_column_calls == [2, 2]
+    assert batch_calls == [2]
 
 
 def test_write_farvision_status_back_for_run_skips_rows_with_no_source_row_number(monkeypatch):
@@ -3321,6 +3360,10 @@ def test_write_farvision_status_back_for_run_skips_rows_with_no_source_row_numbe
 def test_write_farvision_status_back_for_run_never_raises_when_write_fails(monkeypatch):
     transactions = [_minimal_txn("receipt_payment")]
 
+    monkeypatch.setattr(
+        "app.services.automation_engine.sheets_client.find_source_header_row",
+        lambda sheet_id, sheet_name: 1,
+    )
     monkeypatch.setattr("app.services.automation_engine.sheets_client.ensure_column", lambda *a, **k: None)
     monkeypatch.setattr(
         "app.services.automation_engine.sheets_client.batch_apply_cell_flags",

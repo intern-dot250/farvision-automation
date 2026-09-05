@@ -228,6 +228,38 @@ def get_worksheet_values(sheet_id: str, worksheet_name: str, row_limit: int | No
     return worksheet.get_values(range_name)
 
 
+# Same values as statement_parser.REQUIRED_COLUMNS, duplicated (not
+# imported) to avoid a circular import - statement_parser already imports
+# this module. Used only by find_source_header_row below.
+_REQUIRED_HEADER_COLUMNS = ["TXN DATE", "DESCRIPTION", "REFERENCE", "DEBITS", "CREDITS"]
+_MAX_HEADER_SCAN_ROWS = 10
+
+
+def find_source_header_row(sheet_id: str, worksheet_name: str) -> int:
+    """Detects the 1-indexed row number of the real transaction header on a
+    source bank-statement tab. Some of these tabs put a summary/metadata row
+    (e.g. "LAST UPDATE", a date, running totals) on row 1 and the real
+    per-column header (Business Unit, Head, Auth MB/MK/NM, ...) on row 2 -
+    same layout statement_parser.py's _find_header_row() already handles
+    when reading transaction data. ensure_column/batch_apply_cell_flags
+    otherwise assume row 1 unconditionally, which is correct for sheets we
+    create (always row-1-headered) but wrong here - confirmed live: it
+    caused the "Farvision Status"/"Export Status" columns to be created on
+    row 1 at a column position that coincidentally aligned with row 2's
+    Business Unit/Head columns, so every status write actually overwrote
+    those cells instead of a dedicated column.
+
+    Falls back to row 1 if no row matches - preserves today's behavior for
+    any sheet that's already legitimately row-1-headered, never raises.
+    """
+    values = get_worksheet_values(sheet_id, worksheet_name, row_limit=_MAX_HEADER_SCAN_ROWS)
+    for i, row in enumerate(values):
+        cells = {str(v).strip() for v in row}
+        if all(col in cells for col in _REQUIRED_HEADER_COLUMNS):
+            return i + 1
+    return 1
+
+
 def get_or_create_worksheet(
     sheet_id: str, worksheet_name: str, rows: int = 10000, cols: int = 4
 ) -> gspread.Worksheet:
@@ -272,13 +304,22 @@ def _ensure_header(worksheet: gspread.Worksheet, sheet_id: str, worksheet_name: 
     return header
 
 
-def ensure_column(sheet_id: str, worksheet_name: str, column_name: str) -> str:
+def ensure_column(sheet_id: str, worksheet_name: str, column_name: str, header_row: int = 1) -> str:
     """Appends `column_name` as a new header cell (in the next empty column
-    of row 1) if it isn't already present on this worksheet - self-healing,
-    no manual one-time sheet setup needed, same convention as
+    of `header_row`) if it isn't already present on this worksheet -
+    self-healing, no manual one-time sheet setup needed, same convention as
     get_or_create_worksheet. Used to add the machine-owned "Farvision Status"/
     "Export Status" columns to a source Google Sheet tab the app doesn't
     otherwise write to.
+
+    `header_row` defaults to 1 (every existing caller before this parameter
+    existed), which keeps using the shared, cached `_get_header` exactly as
+    before. A caller that knows the real header lives elsewhere (see
+    find_source_header_row above) passes that row instead - read fresh, not
+    cached, since this path is only used a couple of times per sheet per
+    run. Passing the wrong row here is what previously caused these two
+    status columns to land on row 1 and silently overwrite row 2's Business
+    Unit/Head cells on sheets whose real header isn't row 1 - confirmed live.
 
     Matching is case-insensitive and trimmed: a human-added column like
     "Export status" or " Export Status " counts as the same column, so it's
@@ -291,13 +332,14 @@ def ensure_column(sheet_id: str, worksheet_name: str, column_name: str) -> str:
     they may differ.
     """
     worksheet = get_worksheet(sheet_id, worksheet_name)
-    header = _get_header(sheet_id, worksheet_name, worksheet)
+    header = _get_header(sheet_id, worksheet_name, worksheet) if header_row == 1 else worksheet.row_values(header_row)
     for existing in header:
         if existing.strip().lower() == column_name.strip().lower():
             return existing
     letter = _column_letter(len(header) + 1)
-    worksheet.update(range_name=f"{letter}1", values=[[column_name]])
-    _header_cache[(sheet_id, worksheet_name)] = header + [column_name]
+    worksheet.update(range_name=f"{letter}{header_row}", values=[[column_name]])
+    if header_row == 1:
+        _header_cache[(sheet_id, worksheet_name)] = header + [column_name]
     return column_name
 
 
@@ -573,7 +615,7 @@ def add_cell_note(sheet_id: str, worksheet_name: str, row_number: int, column: s
     worksheet.insert_note(f"{letter}{row_number}", note_text)
 
 
-def batch_apply_cell_flags(sheet_id: str, worksheet_name: str, flags: list[dict]) -> None:
+def batch_apply_cell_flags(sheet_id: str, worksheet_name: str, flags: list[dict], header_row: int = 1) -> None:
     """Apply many dropdown-validation / note / formula cell writes in a
     single Sheets API batch_update call, instead of one call per (row,
     field) pair - used for the post-write "flag this row for review"
@@ -603,11 +645,19 @@ def batch_apply_cell_flags(sheet_id: str, worksheet_name: str, flags: list[dict]
     (Sheets API batchUpdate is all-or-nothing) - callers should treat
     this the same "cosmetic, never blocks the real write" way the
     previous per-row calls were already treated.
+
+    `header_row` defaults to 1 (every existing caller) and resolves
+    `column` against the same cached row-1 header as always. A caller that
+    knows the real header lives elsewhere (see find_source_header_row)
+    passes that row so `column` resolves to the right column letter instead
+    of whatever row 1 happens to contain there - see ensure_column's
+    docstring for why this matters. `row_number` in each flag is always an
+    absolute sheet row already, independent of header_row.
     """
     if not flags:
         return
     worksheet = get_worksheet(sheet_id, worksheet_name)
-    header = _get_header(sheet_id, worksheet_name, worksheet)
+    header = _get_header(sheet_id, worksheet_name, worksheet) if header_row == 1 else worksheet.row_values(header_row)
     spreadsheet = open_sheet(sheet_id)
 
     requests = []

@@ -432,6 +432,31 @@ def test_batch_apply_cell_flags_value_writes_a_literal_string(monkeypatch):
     assert requests[0]["updateCells"]["rows"][0]["values"][0]["userEnteredValue"] == {"stringValue": "Exported"}
 
 
+def test_batch_apply_cell_flags_resolves_column_against_a_custom_header_row(monkeypatch):
+    # If the real header is on row 2 (not row 1), the column lookup must use
+    # row 2's header, not the cached row-1 header - otherwise "Export
+    # Status" resolves to whatever unrelated column row 1 happens to have
+    # at that position (confirmed live: previously landed on Business
+    # Unit/Head).
+    mock_ws = MagicMock()
+    mock_ws.id = 123
+    mock_ws.row_values.return_value = ["SL#", "TXN DATE", "Export Status"]
+    mock_spreadsheet = MagicMock()
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+    monkeypatch.setattr(sheets_client, "open_sheet", lambda sid: mock_spreadsheet)
+
+    sheets_client.batch_apply_cell_flags(
+        "sheet1", "Tab A",
+        [{"row_number": 5, "column": "Export Status", "value": "exported"}],
+        header_row=2,
+    )
+
+    mock_ws.row_values.assert_called_with(2)
+    requests = mock_spreadsheet.batch_update.call_args.args[0]["requests"]
+    assert len(requests) == 1
+    assert requests[0]["updateCells"]["range"]["startColumnIndex"] == 2
+
+
 def test_ensure_column_appends_missing_header(monkeypatch):
     mock_ws = MagicMock()
     mock_ws.row_values.return_value = ["TXN DATE", "DESCRIPTION"]
@@ -452,6 +477,46 @@ def test_ensure_column_is_a_no_op_when_column_already_exists(monkeypatch):
 
     mock_ws.update.assert_not_called()
     assert result == "Farvision Status"
+
+
+def test_ensure_column_appends_at_a_custom_header_row(monkeypatch):
+    # Some source sheets have their real header on row 2, not row 1 (row 1
+    # is a summary/metadata row) - a caller that detected this via
+    # find_source_header_row must get the new column written on that row,
+    # not row 1, or it lands on top of unrelated data (confirmed live:
+    # previously overwrote Business Unit/Head).
+    mock_ws = MagicMock()
+    mock_ws.row_values.return_value = ["TXN DATE", "DESCRIPTION"]
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    result = sheets_client.ensure_column("sheet1", "Tab A", "Export Status", header_row=2)
+
+    mock_ws.row_values.assert_called_with(2)
+    mock_ws.update.assert_called_once_with(range_name="C2", values=[["Export Status"]])
+    assert result == "Export Status"
+
+
+def test_find_source_header_row_detects_header_on_row_two(monkeypatch):
+    monkeypatch.setattr(
+        sheets_client,
+        "get_worksheet_values",
+        lambda sid, wn, row_limit=None: [
+            ["LAST UPDATE", "4-Aug-26"],
+            ["SL#", "TXN DATE", "DESCRIPTION", "REFERENCE", "DEBITS", "CREDITS"],
+        ],
+    )
+
+    assert sheets_client.find_source_header_row("sheet1", "Tab A") == 2
+
+
+def test_find_source_header_row_falls_back_to_row_one_when_no_match(monkeypatch):
+    monkeypatch.setattr(
+        sheets_client,
+        "get_worksheet_values",
+        lambda sid, wn, row_limit=None: [["something", "else"]],
+    )
+
+    assert sheets_client.find_source_header_row("sheet1", "Tab A") == 1
 
 
 def test_ensure_column_reuses_existing_column_with_different_casing_or_spacing(monkeypatch):

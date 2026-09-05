@@ -1577,13 +1577,21 @@ def _write_status_columns_back(
             continue
         columns_used = {column for _, column, _ in entries}
         try:
+            # These source sheets don't always have their real header on
+            # row 1 (some put a summary/metadata row there and the real
+            # per-column header on row 2) - detecting it here, the same way
+            # statement_parser already does for reading transactions, is
+            # what keeps ensure_column/batch_apply_cell_flags below from
+            # landing on the wrong row and overwriting unrelated columns
+            # (confirmed live: previously landed on Business Unit/Head).
+            header_row = sheets_client.find_source_header_row(spreadsheet_id, sheet_name)
             # ensure_column resolves to whatever header text is actually on
             # the sheet (e.g. a human-typed "Export status") rather than
             # necessarily the canonical name requested - every write below
             # must go through this resolved name, or it'd target a column
             # that doesn't exist under that exact spelling.
             resolved_columns = {
-                column: sheets_client.ensure_column(spreadsheet_id, sheet_name, column)
+                column: sheets_client.ensure_column(spreadsheet_id, sheet_name, column, header_row=header_row)
                 for column in columns_used
             }
         except Exception as exc:
@@ -1600,7 +1608,7 @@ def _write_status_columns_back(
         ]
         for attempt in (1, 2):
             try:
-                sheets_client.batch_apply_cell_flags(spreadsheet_id, sheet_name, flags)
+                sheets_client.batch_apply_cell_flags(spreadsheet_id, sheet_name, flags, header_row=header_row)
                 break
             except Exception as exc:
                 if attempt < 2:
