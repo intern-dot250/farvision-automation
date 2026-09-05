@@ -86,6 +86,15 @@ function LoginForm() {
             </button>
           </form>
 
+          <div className="mt-3 text-center">
+            <a
+              href="/api/auth/google?intent=reset"
+              className="text-sm text-indigo-600 hover:underline dark:text-indigo-400"
+            >
+              Forgot password?
+            </a>
+          </div>
+
           <div className="my-4 flex items-center gap-3">
             <div className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
             <span className="text-xs text-zinc-400 dark:text-zinc-600">or</span>
@@ -104,10 +113,6 @@ function LoginForm() {
               {GOOGLE_ERROR_MESSAGES[googleError] ?? "Google sign-in failed. Please try again."}
             </p>
           )}
-
-          <p className="mt-4 text-center text-xs text-zinc-400 dark:text-zinc-600">
-            Forgot the password? Sign in with Google above, then set a new one from Settings.
-          </p>
         </Card>
       </div>
     </div>

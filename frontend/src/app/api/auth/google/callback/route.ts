@@ -2,7 +2,7 @@ import { OAuth2Client } from "google-auth-library";
 import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import { SESSION_COOKIE, getExpectedSessionValue } from "@/lib/auth";
-import { STATE_COOKIE } from "../route";
+import { INTENT_COOKIE, STATE_COOKIE } from "../route";
 
 function loginRedirect(request: NextRequest, error: string) {
   return NextResponse.redirect(new URL(`/login?error=${error}`, request.url));
@@ -16,7 +16,9 @@ function loginRedirect(request: NextRequest, error: string) {
 export async function GET(request: NextRequest) {
   const cookieStore = await cookies();
   const expectedState = cookieStore.get(STATE_COOKIE)?.value;
+  const intent = cookieStore.get(INTENT_COOKIE)?.value;
   cookieStore.delete(STATE_COOKIE);
+  cookieStore.delete(INTENT_COOKIE);
 
   const searchParams = request.nextUrl.searchParams;
   const error = searchParams.get("error");
@@ -82,7 +84,7 @@ export async function GET(request: NextRequest) {
       maxAge: 60 * 60 * 24 * 30,
     });
 
-    return NextResponse.redirect(new URL("/", request.url));
+    return NextResponse.redirect(new URL(intent === "reset" ? "/settings" : "/", request.url));
   } catch {
     return loginRedirect(request, "google_failed");
   }
