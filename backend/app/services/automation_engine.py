@@ -1577,8 +1577,15 @@ def _write_status_columns_back(
             continue
         columns_used = {column for _, column, _ in entries}
         try:
-            for column in columns_used:
-                sheets_client.ensure_column(spreadsheet_id, sheet_name, column)
+            # ensure_column resolves to whatever header text is actually on
+            # the sheet (e.g. a human-typed "Export status") rather than
+            # necessarily the canonical name requested - every write below
+            # must go through this resolved name, or it'd target a column
+            # that doesn't exist under that exact spelling.
+            resolved_columns = {
+                column: sheets_client.ensure_column(spreadsheet_id, sheet_name, column)
+                for column in columns_used
+            }
         except Exception as exc:
             logger.error(f"[{run_id}] Failed to ensure status column(s) on '{sheet_name}': {exc}")
             ledger_repository.log_audit(
@@ -1588,7 +1595,7 @@ def _write_status_columns_back(
             continue
 
         flags = [
-            {"row_number": row_number, "column": column, "value": value}
+            {"row_number": row_number, "column": resolved_columns[column], "value": value}
             for row_number, column, value in entries
         ]
         for attempt in (1, 2):

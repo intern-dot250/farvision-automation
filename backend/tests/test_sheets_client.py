@@ -437,9 +437,10 @@ def test_ensure_column_appends_missing_header(monkeypatch):
     mock_ws.row_values.return_value = ["TXN DATE", "DESCRIPTION"]
     monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
 
-    sheets_client.ensure_column("sheet1", "Tab A", "Farvision Status")
+    result = sheets_client.ensure_column("sheet1", "Tab A", "Farvision Status")
 
     mock_ws.update.assert_called_once_with(range_name="C1", values=[["Farvision Status"]])
+    assert result == "Farvision Status"
 
 
 def test_ensure_column_is_a_no_op_when_column_already_exists(monkeypatch):
@@ -447,9 +448,25 @@ def test_ensure_column_is_a_no_op_when_column_already_exists(monkeypatch):
     mock_ws.row_values.return_value = ["TXN DATE", "Farvision Status"]
     monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
 
-    sheets_client.ensure_column("sheet1", "Tab A", "Farvision Status")
+    result = sheets_client.ensure_column("sheet1", "Tab A", "Farvision Status")
 
     mock_ws.update.assert_not_called()
+    assert result == "Farvision Status"
+
+
+def test_ensure_column_reuses_existing_column_with_different_casing_or_spacing(monkeypatch):
+    # A human-typed column ("Export status") must be recognized as the same
+    # column as the canonical "Export Status" - otherwise a second,
+    # differently-cased column gets created and silently receives all the
+    # writes while the human's column stays blank (confirmed live).
+    mock_ws = MagicMock()
+    mock_ws.row_values.return_value = ["TXN DATE", "Export status"]
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    result = sheets_client.ensure_column("sheet1", "Tab A", "Export Status")
+
+    mock_ws.update.assert_not_called()
+    assert result == "Export status"
 
 
 def test_batch_apply_cell_flags_dropdown_values_takes_precedence_over_dropdown_range(monkeypatch):

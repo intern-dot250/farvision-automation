@@ -3241,9 +3241,13 @@ def test_write_farvision_status_back_for_run_writes_exported_and_skipped_rows(mo
 
     ensured = []
     written = []
+    def _fake_ensure_column(sheet_id, sheet_name, column):
+        ensured.append((sheet_id, sheet_name, column))
+        return column
+
     monkeypatch.setattr(
         "app.services.automation_engine.sheets_client.ensure_column",
-        lambda sheet_id, sheet_name, column: ensured.append((sheet_id, sheet_name, column)),
+        _fake_ensure_column,
     )
     monkeypatch.setattr(
         "app.services.automation_engine.sheets_client.batch_apply_cell_flags",
@@ -3272,6 +3276,31 @@ def test_write_farvision_status_back_for_run_writes_exported_and_skipped_rows(mo
         (2, "Farvision Status", FARVISION_STATUS_SKIPPED_APPROVAL),
         (2, "Export Status", EXPORT_STATUS_NOT_AUTH),
     }
+
+
+def test_write_farvision_status_back_for_run_writes_through_resolved_column_name(monkeypatch):
+    # ensure_column may resolve "Export Status" to a differently-cased
+    # column already on the sheet (e.g. "Export status", human-typed) - the
+    # actual write must target that resolved name, not the canonical one,
+    # or it'd silently write to a column that doesn't exist under that
+    # exact spelling.
+    transactions = [_minimal_txn("receipt_payment", source_sheet="Tab A", source_row_number=2)]
+
+    written = []
+    monkeypatch.setattr(
+        "app.services.automation_engine.sheets_client.ensure_column",
+        lambda sheet_id, sheet_name, column: "Export status" if column == "Export Status" else column,
+    )
+    monkeypatch.setattr(
+        "app.services.automation_engine.sheets_client.batch_apply_cell_flags",
+        lambda sheet_id, sheet_name, flags: written.append(flags),
+    )
+
+    write_farvision_status_back_for_run("spreadsheet-id", transactions, [], "run-1")
+
+    columns_written = {f["column"] for f in written[0]}
+    assert "Export status" in columns_written
+    assert "Export Status" not in columns_written
 
 
 def test_write_farvision_status_back_for_run_skips_rows_with_no_source_row_number(monkeypatch):

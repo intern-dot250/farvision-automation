@@ -272,21 +272,33 @@ def _ensure_header(worksheet: gspread.Worksheet, sheet_id: str, worksheet_name: 
     return header
 
 
-def ensure_column(sheet_id: str, worksheet_name: str, column_name: str) -> None:
+def ensure_column(sheet_id: str, worksheet_name: str, column_name: str) -> str:
     """Appends `column_name` as a new header cell (in the next empty column
     of row 1) if it isn't already present on this worksheet - self-healing,
     no manual one-time sheet setup needed, same convention as
-    get_or_create_worksheet. No-op if the column already exists. Used to
-    add the machine-owned "Farvision Status" column to a source Google Sheet
-    tab the app doesn't otherwise write to.
+    get_or_create_worksheet. Used to add the machine-owned "Farvision Status"/
+    "Export Status" columns to a source Google Sheet tab the app doesn't
+    otherwise write to.
+
+    Matching is case-insensitive and trimmed: a human-added column like
+    "Export status" or " Export Status " counts as the same column, so it's
+    reused as-is (returned verbatim, never renamed) instead of creating a
+    second, differently-cased duplicate that silently receives all the
+    writes while the human's column stays blank - confirmed live on a real
+    sheet. Returns the exact header string now on the sheet (the existing
+    one if matched, otherwise the newly-created canonical `column_name`) -
+    callers must write through that string, not the canonical name, since
+    they may differ.
     """
     worksheet = get_worksheet(sheet_id, worksheet_name)
     header = _get_header(sheet_id, worksheet_name, worksheet)
-    if column_name in header:
-        return
+    for existing in header:
+        if existing.strip().lower() == column_name.strip().lower():
+            return existing
     letter = _column_letter(len(header) + 1)
     worksheet.update(range_name=f"{letter}1", values=[[column_name]])
     _header_cache[(sheet_id, worksheet_name)] = header + [column_name]
+    return column_name
 
 
 def read_all_records(sheet_id: str, worksheet_name: str) -> list[dict]:
