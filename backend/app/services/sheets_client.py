@@ -336,7 +336,15 @@ def ensure_column(sheet_id: str, worksheet_name: str, column_name: str, header_r
     for existing in header:
         if existing.strip().lower() == column_name.strip().lower():
             return existing
-    letter = _column_letter(len(header) + 1)
+    next_col_index = len(header) + 1
+    # A worksheet's grid doesn't auto-expand for a write outside its current
+    # bounds - the Sheets API rejects it outright (confirmed live: "Range
+    # exceeds grid limits") rather than growing the sheet for you. Narrow
+    # source sheets (e.g. exactly 29 columns wide, nothing spare) need an
+    # explicit resize before the new header cell can be written.
+    if next_col_index > worksheet.col_count:
+        worksheet.add_cols(next_col_index - worksheet.col_count)
+    letter = _column_letter(next_col_index)
     worksheet.update(range_name=f"{letter}{header_row}", values=[[column_name]])
     if header_row == 1:
         _header_cache[(sheet_id, worksheet_name)] = header + [column_name]

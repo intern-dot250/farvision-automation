@@ -460,10 +460,30 @@ def test_batch_apply_cell_flags_resolves_column_against_a_custom_header_row(monk
 def test_ensure_column_appends_missing_header(monkeypatch):
     mock_ws = MagicMock()
     mock_ws.row_values.return_value = ["TXN DATE", "DESCRIPTION"]
+    mock_ws.col_count = 26
     monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
 
     result = sheets_client.ensure_column("sheet1", "Tab A", "Farvision Status")
 
+    mock_ws.add_cols.assert_not_called()
+    mock_ws.update.assert_called_once_with(range_name="C1", values=[["Farvision Status"]])
+    assert result == "Farvision Status"
+
+
+def test_ensure_column_expands_the_grid_when_the_new_column_is_out_of_bounds(monkeypatch):
+    # Writing beyond a worksheet's current column count is rejected outright
+    # by the Sheets API ("Range exceeds grid limits") rather than
+    # auto-growing the sheet - confirmed live on a source sheet that was
+    # exactly as wide as its last real column, with no spare column for a
+    # newly-added status column.
+    mock_ws = MagicMock()
+    mock_ws.row_values.return_value = ["TXN DATE", "DESCRIPTION"]
+    mock_ws.col_count = 2
+    monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
+
+    result = sheets_client.ensure_column("sheet1", "Tab A", "Farvision Status")
+
+    mock_ws.add_cols.assert_called_once_with(1)
     mock_ws.update.assert_called_once_with(range_name="C1", values=[["Farvision Status"]])
     assert result == "Farvision Status"
 
@@ -487,6 +507,7 @@ def test_ensure_column_appends_at_a_custom_header_row(monkeypatch):
     # previously overwrote Business Unit/Head).
     mock_ws = MagicMock()
     mock_ws.row_values.return_value = ["TXN DATE", "DESCRIPTION"]
+    mock_ws.col_count = 26
     monkeypatch.setattr(sheets_client, "get_worksheet", lambda sid, wn: mock_ws)
 
     result = sheets_client.ensure_column("sheet1", "Tab A", "Export Status", header_row=2)
