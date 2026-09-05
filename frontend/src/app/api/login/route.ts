@@ -6,7 +6,7 @@ export async function POST(request: Request) {
   const body = await request.json().catch(() => null);
   const password = typeof body?.password === "string" ? body.password : "";
 
-  if (!password || !(await checkPassword(password))) {
+  if (!password || !(await checkPassword(password, new URL(request.url).origin))) {
     return NextResponse.json({ error: "Incorrect password" }, { status: 401 });
   }
 

@@ -16,9 +16,19 @@ export function getExpectedSessionValue(): string {
 
 // Verified against the backend (Supabase-backed, resettable) rather than a
 // static env var - see backend/app/api/v1/auth.py's /verify-password.
-export async function checkPassword(candidate: string): Promise<boolean> {
+//
+// `origin` is required because NEXT_PUBLIC_API_BASE_URL is often a relative
+// path (e.g. "/api/v1" - see vercel.json's rewrite of /api/v1/* to the
+// Python backend on this same domain). That's fine for browser fetches,
+// which resolve relative URLs against the current page automatically, but
+// Node's server-side fetch() has no implicit origin and throws on a
+// relative string - silently swallowed by the catch below, which used to
+// make every password look "incorrect" regardless of what was typed. Same
+// fix as /api/clear-sheet/route.ts's backendUrl construction.
+export async function checkPassword(candidate: string, origin: string): Promise<boolean> {
   try {
-    const response = await fetch(`${API_BASE_URL}/auth/verify-password`, {
+    const url = new URL(`${API_BASE_URL}/auth/verify-password`, origin);
+    const response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ password: candidate }),
